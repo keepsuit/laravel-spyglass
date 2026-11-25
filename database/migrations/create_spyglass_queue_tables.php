@@ -31,7 +31,7 @@ return new class extends Migration
             $table->unsignedBigInteger('duration_sum')->default(0);
             $table->unsignedInteger('duration_max')->default(0);
 
-            $table->unique(['bucket', 'connection', 'queue', 'job', 'scope']);
+            $table->unique(['bucket', 'connection', 'queue', 'job', 'scope'], 'spyglass_queue_aggregates_key');
         });
 
         Schema::create('spyglass_queue_failed_jobs', function (Blueprint $table) {

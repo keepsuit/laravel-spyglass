@@ -174,7 +174,8 @@ it('keeps the scope captured when the job started after the context is cleared',
 
     work();
 
-    expect(failedRows()[0])->toMatchArray(['scope' => 'tenant:acme', 'context' => '{"tenant":"acme"}']);
+    expect(failedRows()[0]['scope'])->toBe('tenant:acme')
+        ->and(json_decode(failedRows()[0]['context'], true))->toBe(['tenant' => 'acme']);
 });
 
 it('splits aggregates by scope when enabled', function () {
