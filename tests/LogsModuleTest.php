@@ -9,6 +9,8 @@ use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Tests\Fixtures\WithLogsModule;
+use Monolog\Handler\NullHandler;
+use Monolog\Handler\TestHandler;
 
 uses(WithLogsModule::class);
 
@@ -145,6 +147,19 @@ it('lets records reach the channels after it', function () {
     expect(logEntries())->toHaveCount(1)
         ->and(Log::channel('test')->getLogger()->getHandlers()[0]->hasErrorThatContains('Shared'))->toBeTrue();
 });
+
+it('keeps the spyglass channel of a stack silent when Spyglass or the logs module is disabled', function (array $config) {
+    $app = $this->bootApplication($config);
+
+    $app['log']->channel('stack')->error('Still logged');
+
+    // An unknown driver would add Laravel's emergency file handler, at debug level, in its place.
+    expect(array_map(get_class(...), $app['log']->channel('stack')->getLogger()->getHandlers()))->toBe([TestHandler::class, NullHandler::class])
+        ->and($app['log']->channel('test')->getLogger()->getHandlers()[0]->hasErrorThatContains('Still logged'))->toBeTrue();
+})->with([
+    'Spyglass disabled' => [['spyglass.enabled' => false]],
+    'logs module disabled' => [['spyglass.modules.logs.enabled' => false]],
+]);
 
 it('prunes entries older than the retention', function () {
     $this->travelTo(now()->subDays(8));
