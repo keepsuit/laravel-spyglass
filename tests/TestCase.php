@@ -3,8 +3,8 @@
 namespace Keepsuit\Spyglass\Tests;
 
 use Illuminate\Database\Eloquent\Factories\Factory;
-use Orchestra\Testbench\TestCase as Orchestra;
 use Keepsuit\Spyglass\SpyglassServiceProvider;
+use Orchestra\Testbench\TestCase as Orchestra;
 
 class TestCase extends Orchestra
 {

@@ -2,9 +2,9 @@
 
 namespace Keepsuit\Spyglass;
 
+use Keepsuit\Spyglass\Commands\SpyglassCommand;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
-use Keepsuit\Spyglass\Commands\SpyglassCommand;
 
 class SpyglassServiceProvider extends PackageServiceProvider
 {
