@@ -17,7 +17,6 @@ return new class extends Migration
         Schema::create('spyglass_log_entries', function (Blueprint $table) {
             $table->id();
             $table->string('level', 16);
-            $table->string('channel', 64);
             $table->text('message');
             // Text, not JSON: truncation can cut the JSON short.
             $table->text('log_context')->nullable();

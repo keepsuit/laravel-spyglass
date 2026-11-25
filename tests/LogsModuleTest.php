@@ -35,7 +35,6 @@ it('stores records at or above the configured level', function () {
     expect(array_column($entries, 'message'))->toBe(['Disk almost full', 'Down'])
         ->and($entries[0])->toMatchArray([
             'level' => 'warning',
-            'channel' => 'testing',
             'log_context' => '{"disk":"local","free":12}',
             'logged_at' => '2026-03-01 10:00:00',
             'scope' => 'tenant:acme',
@@ -61,7 +60,7 @@ it('does nothing for records below the level', function () {
     SpyglassFacade::flush();
 
     expect(SpyglassFacade::connection()->getQueryLog())->toBe([])
-        ->and(SpyglassFacade::cache()->get('spyglass:log:'.sha1('200|Not stored')))->toBeNull();
+        ->and(SpyglassFacade::cache()->getStore()->all())->toBe([]);
 });
 
 it('keeps the log of reported exceptions when the exceptions module is off', function () {
@@ -112,18 +111,97 @@ it('stores at most one entry per minute for the same level and message', functio
     expect(logEntries())->toHaveCount(4);
 });
 
-it('stores entries when the cache is unavailable', function () {
+it('throttles within the process when the cache is unavailable', function () {
     app()->instance(Spyglass::class, new Spyglass(SpyglassFacade::connection()->getName(), 'missing'));
     SpyglassFacade::clearResolvedInstance(Spyglass::class);
 
     Log::error('First');
     Log::error('First');
+    Log::error('Second');
     SpyglassFacade::flush();
 
-    expect(logEntries())->toHaveCount(2)
+    expect(array_column(logEntries(), 'message'))->toBe(['First', 'Second'])
         ->and($this->spyglassErrors)->toHaveCount(1)
         ->and($this->spyglassErrors[0]->message)->toContain('throttle');
     $this->spyglassErrors = [];
+});
+
+it('throttles within the process with a cache store that keeps nothing', function () {
+    config()->set('cache.stores.none', ['driver' => 'null']);
+    app()->instance(Spyglass::class, new Spyglass(SpyglassFacade::connection()->getName(), 'none'));
+    SpyglassFacade::clearResolvedInstance(Spyglass::class);
+
+    Log::error('First');
+    Log::error('First');
+    Log::error('Second');
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'message'))->toBe(['First', 'Second']);
+});
+
+it('throttles in the process before asking the cache', function () {
+    Log::error('First');
+    SpyglassFacade::cache()->flush();
+    Log::error('First');
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(1);
+});
+
+it('throttles each scope on its own', function () {
+    config()->set('spyglass.context.keys', ['tenant_id']);
+    SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
+
+    foreach (['acme', 'acme', 'other'] as $tenant) {
+        Context::add('tenant_id', $tenant);
+        Log::error('Payment failed');
+    }
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'scope'))->toBe(['acme', 'other']);
+});
+
+it('does not store records logged by application code it runs while storing', function () {
+    // Alone: other handlers serialize the context too, outside Spyglass.
+    config()->set('logging.channels.stack.channels', ['spyglass']);
+    Log::forgetChannel('stack');
+    $context = new class implements JsonSerializable
+    {
+        public function jsonSerialize(): mixed
+        {
+            Log::error('Logged while encoding');
+
+            return 'encoded';
+        }
+    };
+
+    Log::error('Outer', ['value' => $context]);
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'message'))->toBe(['Outer'])
+        ->and(logEntries()[0]['log_context'])->toBe('{"value":"encoded"}');
+});
+
+it('stores at most 100 entries per lifecycle', function () {
+    foreach (range(1, 101) as $i) {
+        Log::error("Message {$i}");
+    }
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(100);
+
+    Event::dispatch('Laravel\Octane\Events\RequestReceived');
+    Log::error('Next request');
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(101);
+});
+
+it('strips NUL bytes', function () {
+    Log::error("Bo\0om", ['value' => "a\0b"]);
+    SpyglassFacade::flush();
+
+    expect(logEntries()[0])->toMatchArray(['message' => 'Boom', 'log_context' => '{"value":"a\\u0000b"}']);
 });
 
 it('truncates the message and the record context', function () {

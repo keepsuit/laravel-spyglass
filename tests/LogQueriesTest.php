@@ -13,7 +13,6 @@ function seedLogEntry(string $message, string $loggedAt, array $values = []): vo
 {
     DB::table(LogsModule::ENTRIES)->insert([
         'level' => 'error',
-        'channel' => 'production',
         'message' => $message,
         'logged_at' => $loggedAt,
         ...$values,
@@ -27,7 +26,7 @@ function logQueries(): LogQueries
 
 beforeEach(function () {
     seedLogEntry('a', '2026-03-01 10:00:00', ['level' => 'warning', 'scope' => 'tenant:acme']);
-    seedLogEntry('b', '2026-03-01 11:00:00', ['channel' => 'worker']);
+    seedLogEntry('b', '2026-03-01 11:00:00');
     seedLogEntry('c', '2026-03-01 12:00:00', ['scope' => 'tenant:acme']);
 });
 
@@ -36,7 +35,6 @@ it('lists entries newest first, with filters', function (array $filters, array $
 })->with([
     'all' => [[], ['c', 'b', 'a']],
     'level' => [['level' => 'error'], ['c', 'b']],
-    'channel' => [['channel' => 'worker'], ['b']],
     'scope' => [['scope' => 'tenant:acme'], ['c', 'a']],
     'from' => [fn () => ['from' => Date::parse('2026-03-01 11:00:00', 'UTC')], ['c', 'b']],
     'to in another timezone' => [fn () => ['to' => Date::parse('2026-03-01 12:00:00', 'Europe/Rome')], ['b', 'a']],

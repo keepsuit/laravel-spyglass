@@ -5,7 +5,9 @@ namespace Keepsuit\Spyglass\Modules\Logs;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use Keepsuit\Spyglass\Modules\Exceptions\Throttle;
 use Monolog\Handler\AbstractHandler;
+use Monolog\Level;
 use Monolog\LogRecord;
 use Throwable;
 
@@ -16,10 +18,29 @@ class LogHandler extends AbstractHandler
 {
     protected const int MAX_BYTES = 4096;
 
+    /** Entries stored per request, job or scheduled task, so distinct messages cannot flood the table either. */
+    protected const int MAX_ENTRIES = 100;
+
+    protected int $stored = 0;
+
+    protected Throttle $throttle;
+
+    public function __construct(int|string|Level $level)
+    {
+        parent::__construct($level);
+
+        $this->throttle = new Throttle;
+    }
+
+    public function startLifecycle(): void
+    {
+        $this->stored = 0;
+    }
+
     public function handle(LogRecord $record): bool
     {
         // Spyglass logs its own failures while ignoring: they reach the other channels only.
-        if (! $this->isHandling($record) || Spyglass::isIgnoring()) {
+        if (! $this->isHandling($record) || Spyglass::isIgnoring() || $this->stored >= self::MAX_ENTRIES) {
             return false;
         }
 
@@ -30,37 +51,35 @@ class LogHandler extends AbstractHandler
             return false;
         }
 
-        try {
-            if (! $this->acquireSlot($record)) {
-                return false;
-            }
+        // Guarded: the cache, the context resolver and objects in the record context run application code that can log in turn.
+        $entry = Spyglass::ignore(function () use ($record) {
+            try {
+                $context = Spyglass::captureContext();
 
-            Spyglass::insert(LogsModule::ENTRIES, [
-                'level' => $record->level->toPsrLogLevel(),
-                'channel' => mb_strcut($record->channel, 0, 64, 'UTF-8'),
-                'message' => $this->truncate($record->message),
-                'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
-                'logged_at' => Date::now('UTC')->toDateTimeString(),
-            ]);
-        } catch (Throwable $e) {
-            Spyglass::report('Spyglass failed to record a log entry', $e);
+                if (! $this->throttle->acquire('spyglass:log:'.sha1($record->level->value.'|'.$record->message.'|'.$context['scope']))) {
+                    return null;
+                }
+
+                return [
+                    'level' => $record->level->toPsrLogLevel(),
+                    'message' => $this->truncate($record->message),
+                    'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
+                    'logged_at' => Date::now('UTC')->toDateTimeString(),
+                    ...$context,
+                ];
+            } catch (Throwable $e) {
+                Spyglass::report('Spyglass failed to record a log entry', $e);
+
+                return null;
+            }
+        });
+
+        if ($entry !== null) {
+            $this->stored++;
+            Spyglass::insert(LogsModule::ENTRIES, $entry);
         }
 
         return false;
-    }
-
-    /**
-     * At most one entry per minute for the same level and message, so a burst cannot flood the table.
-     */
-    protected function acquireSlot(LogRecord $record): bool
-    {
-        try {
-            return Spyglass::cache()->add('spyglass:log:'.sha1($record->level->value.'|'.$record->message), true, 60);
-        } catch (Throwable $e) {
-            Spyglass::report('Spyglass failed to throttle a log entry', $e);
-
-            return true;
-        }
     }
 
     /**
@@ -76,10 +95,10 @@ class LogHandler extends AbstractHandler
     }
 
     /**
-     * Invalid UTF-8 would make PostgreSQL reject the whole batch.
+     * Invalid UTF-8 and NUL bytes would make PostgreSQL reject the whole batch.
      */
     protected function truncate(string $value): string
     {
-        return mb_strcut(mb_scrub($value, 'UTF-8'), 0, self::MAX_BYTES, 'UTF-8');
+        return mb_strcut(mb_scrub(str_replace("\0", '', $value), 'UTF-8'), 0, self::MAX_BYTES, 'UTF-8');
     }
 }
