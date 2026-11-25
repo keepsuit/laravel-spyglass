@@ -12,32 +12,45 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class ExceptionQueries
 {
-    /** Groups considered by the scope filter. */
-    public const int MAX_SCOPE_GROUPS = 1000;
-
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Groups, last seen first.
+     * Groups, last seen first. A group is resolved until an occurrence newer than `resolved_at`: occurrences
+     * are stored after the end of their request or job, so storing one cannot tell whether it is newer.
      *
      * @param  array{status?: 'resolved'|'unresolved', class?: string, scope?: string}  $filters
      * @return Paginator<int, object>
      */
     public function groups(array $filters = [], int $perPage = 25, int $page = 1): Paginator
     {
-        return $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
-            ->when(($filters['status'] ?? null) === 'unresolved', fn (Builder $query) => $query->whereNull('resolved_at'))
-            ->when(($filters['status'] ?? null) === 'resolved', fn (Builder $query) => $query->whereNotNull('resolved_at'))
+        $groups = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
+            ->when(($filters['status'] ?? null) === 'unresolved', fn (Builder $query) => $this->whereUnresolved($query))
+            ->when(($filters['status'] ?? null) === 'resolved', fn (Builder $query) => $this->whereResolved($query))
             ->when($filters['class'] ?? null, fn (Builder $query, string $class) => $query->where('class', $class))
-            ->when($filters['scope'] ?? null, fn (Builder $query, string $scope) => $query->whereIn('fingerprint', $this->fingerprintsIn($scope)))
+            ->when($filters['scope'] ?? null, fn (Builder $query, string $scope) => $query->whereExists(
+                fn (Builder $occurrences) => $occurrences->from(ExceptionsModule::OCCURRENCES)
+                    ->whereColumn(ExceptionsModule::OCCURRENCES.'.fingerprint', ExceptionsModule::GROUPS.'.fingerprint')
+                    ->where('scope', $scope),
+            ))
             ->orderByDesc('last_seen_at')
             ->orderByDesc('id')
             ->simplePaginate($this->clamp($perPage), page: $page);
+
+        foreach ($groups->items() as $group) {
+            $this->withStatus($group);
+        }
+
+        return $groups;
     }
 
+    /**
+     * `resolved_at` is null when the group is not resolved, as in `groups()`.
+     */
     public function group(string $fingerprint): ?object
     {
-        return $this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint)->first();
+        $group = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint)->first();
+
+        return $group === null ? null : $this->withStatus($group);
     }
 
     /**
@@ -55,37 +68,39 @@ class ExceptionQueries
     }
 
     /**
-     * A new occurrence reopens the group.
+     * An occurrence newer than the resolution reopens the group.
      */
     public function resolve(string $fingerprint): bool
     {
-        return $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
-            ->where('fingerprint', $fingerprint)
-            ->whereNull('resolved_at')
+        return $this->whereUnresolved($this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint))
             ->update(['resolved_at' => Date::now('UTC')->toDateTimeString()]) > 0;
     }
 
     public function unresolve(string $fingerprint): bool
     {
-        return $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
-            ->where('fingerprint', $fingerprint)
-            ->whereNotNull('resolved_at')
+        return $this->whereResolved($this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint))
             ->update(['resolved_at' => null]) > 0;
     }
 
-    /**
-     * A separate bounded query: MySQL does not allow `LIMIT` in an `IN` subquery.
-     *
-     * @return array<mixed>
-     */
-    protected function fingerprintsIn(string $scope): array
+    protected function whereUnresolved(Builder $query): Builder
     {
-        return $this->spyglass->connection()->table(ExceptionsModule::OCCURRENCES)
-            ->where('scope', $scope)
-            ->distinct()
-            ->limit(self::MAX_SCOPE_GROUPS)
-            ->pluck('fingerprint')
-            ->all();
+        return $query->where(fn (Builder $query) => $query->whereNull('resolved_at')->orWhereColumn('last_seen_at', '>', 'resolved_at'));
+    }
+
+    protected function whereResolved(Builder $query): Builder
+    {
+        return $query->whereNotNull('resolved_at')->whereColumn('last_seen_at', '<=', 'resolved_at');
+    }
+
+    protected function withStatus(object $group): object
+    {
+        $resolvedAt = data_get($group, 'resolved_at');
+
+        if ($resolvedAt !== null && data_get($group, 'last_seen_at') > $resolvedAt) {
+            data_set($group, 'resolved_at', null);
+        }
+
+        return $group;
     }
 
     /**

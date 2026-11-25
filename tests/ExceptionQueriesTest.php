@@ -95,7 +95,9 @@ it('bounds every query', function () {
 
     $log = Spyglass::connection()->getQueryLog();
 
-    expect($log)->toHaveCount(4)
+    // The scope filter is a correlated subquery, so it never cuts the groups it considers.
+    expect($log)->toHaveCount(3)
         ->and(collect($log)->pluck('query')->every(fn (string $sql) => str_contains($sql, 'limit')))->toBeTrue()
-        ->and(collect($log)->pluck('query')->implode(' '))->toContain('limit 101')->toContain('limit 2')->toContain('limit '.ExceptionQueries::MAX_SCOPE_GROUPS);
+        ->and($log[0]['query'])->toContain('exists')->toContain('limit 101')
+        ->and($log[1]['query'])->toContain('limit 1');
 });

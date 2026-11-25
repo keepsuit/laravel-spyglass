@@ -1,12 +1,15 @@
 <?php
 
+use Illuminate\Cache\ArrayStore;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -16,9 +19,12 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Tests\Fixtures\ConcurrentException;
+use Keepsuit\Spyglass\Tests\Fixtures\ForwardingExceptionHandler;
 use Keepsuit\Spyglass\Tests\Fixtures\TestJob;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsModule;
 use NunoMaduro\Collision\Adapters\Laravel\ExceptionHandler as CollisionHandler;
+use Symfony\Component\ErrorHandler\Error\FatalError;
 
 uses(WithExceptionsModule::class);
 
@@ -99,15 +105,18 @@ it('respects dontReport', function () {
         ->and(DB::table(ExceptionsModule::OCCURRENCES)->count())->toBe(0);
 });
 
-it('registers through handler decorators', function () {
-    // Collision wraps the application handler in console processes outside tests.
-    app()->instance(ExceptionHandler::class, new CollisionHandler(app(), new Handler(app())));
-    (new ExceptionsModule)->boot();
+it('registers on a handler bound after boot, including decorators', function (Closure $handler) {
+    app()->instance(ExceptionHandler::class, $handler());
 
     reportAndFlush(sameSiteException());
 
     expect(exceptionGroup()['count'])->toBe(1);
-});
+})->with([
+    'handler' => fn () => new Handler(app()),
+    // Collision wraps the application handler in console processes outside tests.
+    'Collision decorator' => fn () => new CollisionHandler(app(), new Handler(app())),
+    'decorator forwarding through __call' => fn () => new ForwardingExceptionHandler(new Handler(app())),
+]);
 
 it('counts the same exception instance once', function () {
     $e = sameSiteException();
@@ -118,24 +127,36 @@ it('counts the same exception instance once', function () {
     expect(exceptionGroup()['count'])->toBe(1);
 });
 
-it('adds up counts buffered by separate processes', function () {
-    $connection = SpyglassFacade::connection()->getName();
-    $processes = [];
+it('adds up counts written concurrently by separate processes', function () {
+    $db = SpyglassFacade::connection();
+    $this->travelTo('2100-01-01 00:00:00');
 
-    foreach ([1, 2] as $i) {
-        $processes[$i] = new Spyglass($connection, 'array');
-        app()->instance(Spyglass::class, $processes[$i]);
-        SpyglassFacade::clearResolvedInstance(Spyglass::class);
+    // The open transaction holds the group row, so the other process writes while this one is still writing.
+    $db->beginTransaction();
+    report(ConcurrentException::make());
+    report(ConcurrentException::make());
+    SpyglassFacade::flush();
 
-        report(sameSiteException());
-        report(sameSiteException());
+    $process = fixtureProcess('report');
+    $process->start();
+
+    $waiting = fn () => DB::scalar(DB::getDriverName() === 'pgsql'
+        ? "select count(*) from pg_stat_activity where wait_event_type = 'Lock'"
+        : "select count(*) from information_schema.innodb_trx where trx_state = 'LOCK WAIT'");
+
+    for ($i = 0; $i < 100 && $process->isRunning() && $waiting() === 0; $i++) {
+        usleep(100_000);
     }
 
-    $processes[2]->flush();
-    $processes[1]->flush();
+    expect($waiting())->toBe(1);
 
-    expect(exceptionGroup()['count'])->toBe(4);
-});
+    $db->commit();
+    $process->wait();
+
+    expect($process->getErrorOutput())->toBe('')
+        ->and(exceptionGroup())->toMatchArray(['count' => 4, 'last_seen_at' => '2100-01-01 00:00:00'])
+        ->and(exceptionOccurrences())->toHaveCount(2);
+})->skip(fn () => DB::getDriverName() === 'sqlite', 'SQLite allows a single writer');
 
 it('keeps the first seen time and moves the last seen time', function () {
     $this->travelTo('2026-03-01 10:00:00');
@@ -152,16 +173,29 @@ it('keeps the first seen time and moves the last seen time', function () {
     ]);
 });
 
-it('reopens a resolved group on a new occurrence', function () {
-    $e = sameSiteException();
-    reportAndFlush($e);
+it('reopens a resolved group on an occurrence newer than the resolution, even when stored late', function () {
+    $fingerprint = ExceptionFingerprint::for(sameSiteException());
+    $queries = app(ExceptionQueries::class);
 
-    expect(app(ExceptionQueries::class)->resolve(ExceptionFingerprint::for($e)))->toBeTrue()
-        ->and(exceptionGroup()['resolved_at'])->not->toBeNull();
-
+    $this->travelTo('2026-03-01 10:00:00');
     reportAndFlush(sameSiteException());
 
-    expect(exceptionGroup())->toMatchArray(['resolved_at' => null, 'count' => 2]);
+    $this->travelTo('2026-03-01 10:01:00');
+    report(sameSiteException());
+
+    $this->travelTo('2026-03-01 10:02:00');
+    expect($queries->resolve($fingerprint))->toBeTrue();
+
+    SpyglassFacade::flush();
+
+    expect($queries->group($fingerprint))->toMatchObject(['resolved_at' => '2026-03-01 10:02:00', 'count' => 2])
+        ->and($queries->groups(['status' => 'resolved'])->items())->toHaveCount(1);
+
+    $this->travelTo('2026-03-01 10:03:00');
+    reportAndFlush(sameSiteException());
+
+    expect($queries->group($fingerprint))->toMatchObject(['resolved_at' => null, 'count' => 3])
+        ->and($queries->groups(['status' => 'unresolved'])->items())->toHaveCount(1);
 });
 
 it('stores at most one occurrence per minute and fingerprint, and counts all of them', function () {
@@ -180,17 +214,92 @@ it('stores at most one occurrence per minute and fingerprint, and counts all of 
     expect(exceptionOccurrences())->toHaveCount(3);
 });
 
-it('records occurrences when the cache is unavailable', function () {
-    app()->instance(Spyglass::class, new Spyglass(SpyglassFacade::connection()->getName(), 'missing'));
+it('throttles within the process when the cache is unavailable, trying it again a minute later', function () {
+    $attempts = 0;
+    Cache::extend('failing', function () use (&$attempts) {
+        return Cache::repository(new class($attempts) extends ArrayStore
+        {
+            public function __construct(public int &$attempts) {}
+
+            public function add($key, $value, $seconds)
+            {
+                $this->attempts++;
+
+                throw new RuntimeException('Cache down');
+            }
+        });
+    });
+    config()->set('cache.stores.failing', ['driver' => 'failing']);
+    app()->instance(Spyglass::class, new Spyglass(SpyglassFacade::connection()->getName(), 'failing'));
     SpyglassFacade::clearResolvedInstance(Spyglass::class);
 
     reportAndFlush(sameSiteException());
     reportAndFlush(sameSiteException());
+    reportAndFlush(new ExceptionsModuleTestException);
 
     expect(exceptionOccurrences())->toHaveCount(2)
+        ->and($attempts)->toBe(1)
         ->and($this->spyglassErrors)->toHaveCount(1)
         ->and($this->spyglassErrors[0]->message)->toContain('throttle');
     $this->spyglassErrors = [];
+
+    $this->travel(61)->seconds();
+    reportAndFlush(sameSiteException());
+
+    expect(exceptionOccurrences())->toHaveCount(3)
+        ->and($attempts)->toBe(2);
+    $this->spyglassErrors = [];
+});
+
+it('throttles in the process before asking the cache', function () {
+    reportAndFlush(sameSiteException());
+    SpyglassFacade::cache()->flush();
+    reportAndFlush(sameSiteException());
+
+    expect(exceptionOccurrences())->toHaveCount(1);
+});
+
+it('throttles within the process with a cache store that keeps nothing', function () {
+    config()->set('cache.stores.none', ['driver' => 'null']);
+    app()->instance(Spyglass::class, new Spyglass(SpyglassFacade::connection()->getName(), 'none'));
+    SpyglassFacade::clearResolvedInstance(Spyglass::class);
+
+    reportAndFlush(sameSiteException());
+    reportAndFlush(sameSiteException());
+    reportAndFlush(new ExceptionsModuleTestException);
+
+    expect(exceptionOccurrences())->toHaveCount(2);
+});
+
+it('throttles each scope on its own', function () {
+    config()->set('spyglass.context.keys', ['tenant_id']);
+    SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
+
+    foreach (['acme', 'acme', 'other'] as $tenant) {
+        Context::add('tenant_id', $tenant);
+        report(sameSiteException());
+    }
+    SpyglassFacade::flush();
+
+    expect(array_column(exceptionOccurrences(), 'scope'))->toBe(['acme', 'other'])
+        ->and(exceptionGroup()['count'])->toBe(3);
+});
+
+it('does not record exceptions reported by application code it runs while recording', function () {
+    DB::table('users')->insert(['id' => 7, 'name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'x']);
+    app('session.store')->put(Auth::guard()->getName(), 7);
+    // Runs on the query that resolves the user for the occurrence. Once: Laravel's handler resolves the user too.
+    $reported = false;
+    DB::listen(function () use (&$reported) {
+        if (! $reported) {
+            $reported = true;
+            report(new LogicException('Listener'));
+        }
+    });
+
+    reportAndFlush(sameSiteException());
+
+    expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([RuntimeException::class]);
 });
 
 it('stores the request with query string values masked, except allowlisted keys', function () {
@@ -202,7 +311,7 @@ it('stores the request with query string values masked, except allowlisted keys'
 
     expect(exceptionOccurrences()[0])->toMatchArray([
         'source_type' => 'request',
-        'source' => 'GET /orders/12?filter%5Bemail%5D=***&flag=***&page=2&token=***',
+        'source' => 'GET /orders/{order}?filter%5Bemail%5D=***&flag=***&page=2&token=***',
         'route' => 'orders.show',
     ]);
 });
@@ -233,23 +342,51 @@ it('stores the id of a user the guard already holds', function () {
     expect(exceptionOccurrences()[0]['user_id'])->toBe('7');
 });
 
-it('never queries the database to resolve the user', function () {
+it('stores the id of a user the guard has yet to resolve', function () {
     DB::table('users')->insert(['id' => 7, 'name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'x']);
     app('session.store')->put(Auth::guard()->getName(), 7);
-    DB::enableQueryLog();
-    $queries = null;
-    // Runs right after the Spyglass callback, before Laravel's handler resolves the user for its own log context.
-    app(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$queries) {
-        $queries = DB::getQueryLog();
+
+    reportAndFlush(sameSiteException());
+
+    expect(exceptionOccurrences()[0]['user_id'])->toBe('7');
+});
+
+it('stores query errors without the driver message and the bindings', function () {
+    DB::table('users')->insert(['name' => 'Ada', 'email' => 'secret@example.com', 'password' => 'x']);
+
+    try {
+        DB::table('users')->insert(['name' => 'Ada', 'email' => 'secret@example.com', 'password' => 'x']);
+    } catch (QueryException $e) {
+        reportAndFlush($e);
+    }
+
+    expect($e->getMessage())->toContain('secret@example.com')
+        ->and(exceptionGroup()['message'])->toBe("SQLSTATE[{$e->getCode()}]: {$e->getSql()}")
+        ->and(exceptionOccurrences()[0]['message'])->toBe("SQLSTATE[{$e->getCode()}]: {$e->getSql()}")
+        ->and(json_encode([exceptionGroup(), exceptionOccurrences()]))->not->toContain('secret');
+});
+
+it('does not let a job outlive its attempt in the source of later exceptions', function () {
+    config()->set('spyglass.context.keys', ['tenant_id']);
+    SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
+    Context::add('tenant_id', 'acme');
+    TestJob::dispatch('a', fail: true);
+    Context::forget('tenant_id');
+
+    Route::get('/work', function () {
+        Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+        Context::add('tenant_id', 'other');
+        report(new LogicException('After the job'));
+
+        return 'ok';
     });
 
-    report(sameSiteException());
+    $this->get('/work')->assertOk();
 
-    expect($queries)->toBe([]);
-
-    SpyglassFacade::flush();
-
-    expect(exceptionOccurrences()[0]['user_id'])->toBeNull();
+    expect(DB::table(ExceptionsModule::OCCURRENCES)->orderBy('id')->get(['source_type', 'source', 'scope'])->map(fn ($row) => (array) $row)->all())->toBe([
+        ['source_type' => 'job', 'source' => TestJob::class, 'scope' => 'acme'],
+        ['source_type' => 'request', 'source' => 'GET /work', 'scope' => 'other'],
+    ]);
 });
 
 it('stores the job and its scope, captured before tenancy reverts the context', function () {
@@ -301,6 +438,22 @@ it('truncates messages and bounds the trace', function () {
         ->and(json_decode($occurrence['trace'], true))->toHaveCount(50);
 });
 
+it('strips NUL bytes, which anonymous class names contain', function () {
+    reportAndFlush(new class("Bo\0om") extends RuntimeException {});
+
+    expect(exceptionGroup()['class'])->toStartWith('RuntimeException@anonymous')->not->toContain("\0")
+        ->and(strlen(exceptionGroup()['class']))->toBeLessThanOrEqual(255)
+        ->and(exceptionGroup()['message'])->toBe('Boom')
+        ->and(exceptionOccurrences()[0]['message'])->toBe('Boom');
+});
+
+it('stores the occurrence of a fatal error when the process ends', function () {
+    $db = runToProcessEnd('fatal');
+
+    expect($db->table(ExceptionsModule::GROUPS)->value('class'))->toBe(FatalError::class)
+        ->and($db->table(ExceptionsModule::OCCURRENCES)->count())->toBe(1);
+});
+
 it('does not record exceptions reported while Spyglass is reporting its own failures', function () {
     SpyglassFacade::ignore(fn () => report(sameSiteException('Internal')));
     SpyglassFacade::flush();
@@ -343,6 +496,25 @@ it('stores nothing for a request without exceptions', function () {
     SpyglassFacade::flush();
 
     expect(SpyglassFacade::connection()->getQueryLog())->toBe([]);
+});
+
+it('prunes groups resolved before their retention, unless they occurred again', function () {
+    $queries = app(ExceptionQueries::class);
+    $other = fn () => new ExceptionsModuleTestException;
+
+    $this->travelTo(now()->subDays(31));
+    reportAndFlush(sameSiteException());
+    reportAndFlush($other());
+    $queries->resolve(ExceptionFingerprint::for(sameSiteException()));
+    $queries->resolve(ExceptionFingerprint::for($other()));
+
+    $this->travelBack();
+    reportAndFlush($other());
+    config()->set('spyglass.modules.exceptions.retention.occurrences', 60);
+
+    $this->artisan('spyglass:prune')->assertSuccessful();
+
+    expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
 });
 
 it('prunes old occurrences and groups last seen before their retention', function () {

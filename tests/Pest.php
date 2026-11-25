@@ -2,8 +2,8 @@
 
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Foundation\Application;
 use Illuminate\Database\Connection;
+use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
 use Keepsuit\Spyglass\Tests\TestCase;
 use Symfony\Component\Process\Process;

@@ -43,7 +43,8 @@ function thrown(Closure $callback): Throwable
 it('locates exceptions thrown by vendor code at the first application frame', function () {
     app()->setBasePath(dirname(__DIR__));
 
-    $first = thrown(fn () => throw_if(true, RuntimeException::class)); $line = __LINE__;
+    $line = __LINE__ + 1;
+    $first = thrown(fn () => throw_if(true, RuntimeException::class));
     $second = thrown(fn () => throw_if(true, RuntimeException::class));
     $query = thrown(fn () => DB::select('select * from spyglass_missing'));
     $otherQuery = thrown(fn () => DB::select('select * from spyglass_missing'));
