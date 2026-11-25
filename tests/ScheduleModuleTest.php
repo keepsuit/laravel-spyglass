@@ -53,6 +53,7 @@ it('records a successful run', function () {
             'exit_code' => 0,
             'output' => null,
             'host' => gethostname(),
+            'trigger' => 'schedule',
         ])
         ->and(scheduleRuns()->first()->finished_at)->not->toBeNull()
         ->and(scheduleRuns()->first()->duration_ms)->toBeInt();

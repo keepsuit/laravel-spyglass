@@ -29,6 +29,8 @@ return new class extends Migration
             $table->integer('exit_code')->nullable();
             $table->text('output')->nullable();
             $table->string('host', 191);
+            // What started the run. Only the scheduler today.
+            $table->string('trigger', 16)->default('schedule');
             $table->string('scope', 191)->nullable();
             $table->json('context')->nullable();
 

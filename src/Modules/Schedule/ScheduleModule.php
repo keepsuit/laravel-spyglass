@@ -210,6 +210,7 @@ class ScheduleModule extends Module
             'expression' => $task->getExpression(),
             'timezone' => static::timezone($task),
             'host' => $this->host(),
+            'trigger' => 'schedule',
         ];
     }
 
