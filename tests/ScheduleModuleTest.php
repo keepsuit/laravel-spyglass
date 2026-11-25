@@ -144,6 +144,14 @@ it('publishes the schedule on every run, keeping when each task was first seen',
         ->and(DB::table(ScheduleModule::TASKS)->where('label', 'closure')->value('timezone'))->toBe('Europe/Rome');
 });
 
+it('publishes long cron expressions in full', function () {
+    $task = app(Schedule::class)->exec('true')->cron($expression = implode(',', range(0, 59)).' * * * *');
+
+    publishSchedule();
+
+    expect(scheduleTask($task)->expression)->toBe($expression);
+});
+
 it('publishes the schedule in a single statement', function () {
     foreach (range(1, 5) as $i) {
         app(Schedule::class)->command("spyglass:test-{$i}")->daily();

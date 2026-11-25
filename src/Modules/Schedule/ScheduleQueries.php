@@ -170,8 +170,9 @@ class ScheduleQueries
             }
 
             return Date::instance($cron->getNextRunDate($now, 0, false, $task['timezone']));
-        } catch (Throwable) {
-            // An expression the cron library cannot parse.
+        } catch (Throwable $e) {
+            $this->spyglass->report("Spyglass failed to compute the next run of [{$task['label']}]", $e);
+
             return null;
         }
     }
@@ -189,7 +190,9 @@ class ScheduleQueries
         try {
             $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
             $slot = Date::instance((new CronExpression($task['expression']))->getPreviousRunDate($due, 0, true, $task['timezone']));
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            $this->spyglass->report("Spyglass failed to compute the due time of [{$task['label']}]", $e);
+
             return false;
         }
 

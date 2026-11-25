@@ -237,3 +237,13 @@ it('paginates the runs of a task, newest first, without counting them', function
         ->and($queries[0])->not->toContain('count(')
         ->and(app(ScheduleQueries::class)->runs('task', perPage: 1000)->perPage())->toBe(100);
 });
+
+it('reports an expression it cannot parse instead of failing', function () {
+    insertTask('broken', 'not a cron expression');
+
+    expect(scheduledTask('broken'))->toMatchArray(['next_run' => null, 'missed' => false])
+        ->and(collect($this->spyglassErrors)->pluck('message')->every(fn ($message) => str_contains($message, '[broken]')))->toBeTrue()
+        ->and($this->spyglassErrors)->not->toBeEmpty();
+
+    $this->spyglassErrors = [];
+});

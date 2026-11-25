@@ -22,6 +22,7 @@ use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use ReflectionFunction;
+use RuntimeException;
 use Throwable;
 use WeakMap;
 
@@ -313,12 +314,13 @@ class ScheduleModule extends Module
                     return;
                 }
 
-                $closed = $runs()->where('id', $run->id)->update([
+                $run = (array) $run;
+                $closed = $runs()->where('id', $run['id'])->update([
                     'finished_at' => $this->now(),
-                    'duration_ms' => max(0, (int) Date::parse($run->started_at, 'UTC')->diffInMilliseconds(Date::now())),
+                    'duration_ms' => max(0, (int) Date::parse($run['started_at'], 'UTC')->diffInMilliseconds(Date::now())),
                     'status' => $task->exitCode === 0 ? 'success' : 'failed',
                     'exit_code' => $task->exitCode,
-                    'output' => $this->output($task, $run->output_offset === null ? null : (int) $run->output_offset),
+                    'output' => $this->output($task, $run['output_offset'] === null ? null : (int) $run['output_offset']),
                 ]);
 
                 if ($closed > 0 || is_string($id)) {
@@ -436,6 +438,8 @@ class ScheduleModule extends Module
         $output = @file_get_contents($path, false, null, $start, self::OUTPUT_BYTES);
 
         if ($output === false) {
+            Spyglass::report('Spyglass failed to read the output of a scheduled task', new RuntimeException(error_get_last()['message'] ?? "Cannot read [{$path}]"));
+
             return null;
         }
 
