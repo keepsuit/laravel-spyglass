@@ -61,7 +61,8 @@ it('does nothing for records below the level', function () {
     SpyglassFacade::flush();
 
     expect(SpyglassFacade::connection()->getQueryLog())->toBe([])
-        ->and(SpyglassFacade::cache()->getStore()->all())->toBe([]);
+        // ArrayStore::all() does not exist on the lowest supported Laravel.
+        ->and((fn () => $this->storage)->call(SpyglassFacade::cache()->getStore()))->toBe([]);
 });
 
 it('keeps the log of reported exceptions when the exceptions module is off', function () {
