@@ -22,7 +22,15 @@ return new class extends Migration
             $table->string('label')->nullable();
             $table->unsignedInteger('count')->default(0);
             $table->unsignedInteger('duration_max')->default(0);
+            $table->unsignedInteger('total')->nullable();
+            $table->unsignedInteger('peak')->nullable();
             $table->unique(['bucket', 'name']);
         });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('spyglass_test_entries');
+        Schema::dropIfExists('spyglass_test_counters');
     }
 };

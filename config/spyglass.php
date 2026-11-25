@@ -19,6 +19,8 @@ return [
      * Database connection used to store entries (null = application default).
      * The name is resolved once when the application boots, so runtime switches
      * of the default connection (e.g. per-tenant databases) do not affect it.
+     * Entries are written through a copy of it registered as `spyglass`, outside
+     * the application's transactions (SQLite: through the connection itself).
      */
     'storage' => [
         'connection' => env('SPYGLASS_DB_CONNECTION'),

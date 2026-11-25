@@ -1,15 +1,17 @@
 <?php
 
-use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Queue\WorkerOptions;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Tests\Fixtures\TestJob;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\NullOutput;
 
 function names(): array
 {
@@ -66,13 +68,27 @@ it('flushes after a failed job, including entries recorded by failure listeners'
 });
 
 it('flushes entries left over from a previous lifecycle when a job starts', function () {
-    TestJob::dispatch('job');
+    TestJob::dispatch('job', countRows: true);
     Spyglass::insert('spyglass_test_entries', ['name' => 'leftover']);
 
     runNextJob();
-    Spyglass::flush();
 
-    expect(names())->toBe(['leftover', 'job']);
+    expect(names())->toBe(['leftover', 'job saw 1']);
+});
+
+it('flushes entries reported after a job before the worker idles', function () {
+    app(ExceptionHandler::class)->reportable(fn (RuntimeException $e) => Spyglass::insert('spyglass_test_entries', ['name' => 'reported']));
+
+    $seen = [];
+    Event::listen(Looping::class, function () use (&$seen) {
+        $seen[] = names();
+    });
+
+    TestJob::dispatch('job', fail: true);
+
+    app('queue.worker')->daemon('database', 'default', new WorkerOptions(memory: 4096, sleep: 0, maxTries: 1, stopWhenEmpty: true));
+
+    expect($seen)->toBe([[], ['job', 'job-failed', 'reported']]);
 });
 
 it('flushes when the worker stops', function () {
@@ -83,12 +99,22 @@ it('flushes when the worker stops', function () {
     expect(names())->toBe(['timed-out']);
 });
 
-it('flushes when a command finishes', function () {
-    Spyglass::insert('spyglass_test_entries', ['name' => 'command']);
+it('leaves the entries of a command called during a request to the request', function () {
+    // Laravel fires the command events only outside unit tests.
+    $kernel = app(ConsoleKernel::class);
+    $kernel->rerouteSymfonyCommandEvents()->setArtisan(null);
 
-    event(new CommandFinished('test', new ArrayInput([]), new NullOutput, 0));
+    Artisan::command('spyglass-test:record', fn () => Spyglass::insert('spyglass_test_entries', ['name' => 'command']));
 
-    expect(names())->toBe(['command']);
+    Route::get('/record', function () {
+        Spyglass::insert('spyglass_test_entries', ['name' => 'request']);
+        Artisan::call('spyglass-test:record');
+
+        return DB::table('spyglass_test_entries')->count();
+    });
+
+    $this->get('/record')->assertContent('0');
+    expect(names())->toBe(['request', 'command']);
 });
 
 it('flushes when the application terminates', function () {

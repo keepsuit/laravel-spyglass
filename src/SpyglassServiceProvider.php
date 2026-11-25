@@ -2,7 +2,6 @@
 
 namespace Keepsuit\Spyglass;
 
-use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskSkipped;
@@ -11,6 +10,7 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Event;
@@ -32,11 +32,24 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
     public function packageRegistered(): void
     {
-        $this->app->singleton(Spyglass::class, fn ($app) => new Spyglass(
-            connection: $app['config']->get('spyglass.storage.connection') ?? $app['config']->get('database.default'),
-            cacheStore: $app['config']->get('spyglass.cache.store') ?? $app['config']->get('cache.default'),
-            enabled: (bool) $app['config']->get('spyglass.enabled'),
-        ));
+        $this->app->singleton(Spyglass::class, function ($app) {
+            $config = $app['config'];
+            $connection = $config->get('spyglass.storage.connection') ?? $config->get('database.default');
+
+            // A connection of its own keeps writes out of the application's transactions: a rollback
+            // or a deadlock on either side must not affect the other. SQLite allows a single writer,
+            // so a second connection would wait on the application's own locks.
+            if ($config->get("database.connections.{$connection}.driver") !== 'sqlite') {
+                $config->set('database.connections.spyglass', $config->get("database.connections.{$connection}"));
+                $connection = 'spyglass';
+            }
+
+            return new Spyglass(
+                connection: $connection,
+                cacheStore: $config->get('spyglass.cache.store') ?? $config->get('cache.default'),
+                enabled: (bool) $config->get('spyglass.enabled'),
+            );
+        });
     }
 
     public function packageBooted(): void
@@ -66,23 +79,27 @@ class SpyglassServiceProvider extends PackageServiceProvider
     }
 
     /**
-     * Flush at the end of each request, job, command and scheduled task, and at the start of each
-     * job, scheduled task and Octane request so nothing is carried over from a previous lifecycle.
+     * Flush at the end of each request, job, console command, scheduled task and worker loop, and at the
+     * start of each job, scheduled task and Octane request so nothing is carried over from a previous lifecycle.
      */
     protected function registerLifecycle(Spyglass $spyglass): void
     {
         $flush = fn () => $spyglass->flush();
 
+        // Also ends console commands. Not `CommandFinished`: `Artisan::call()` fires it inside the
+        // calling request or job, whose lifecycle still owns the entries.
         $this->app->terminating($flush);
 
         Event::listen([
+            // The worker reports a job's exception after `JobAttempted`.
+            Looping::class,
             WorkerStopping::class,
-            CommandFinished::class,
             ScheduledTaskStarting::class,
             ScheduledTaskFinished::class,
             ScheduledTaskFailed::class,
             ScheduledTaskSkipped::class,
             'Laravel\Octane\Events\RequestReceived',
+            'Laravel\Octane\Events\RequestTerminated',
         ], $flush);
 
         // Sync jobs run inside the dispatching lifecycle, which flushes them.

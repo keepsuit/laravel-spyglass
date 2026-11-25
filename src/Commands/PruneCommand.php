@@ -21,9 +21,16 @@ class PruneCommand extends Command
                     continue;
                 }
 
-                $deleted = $spyglass->connection()->table($table)
+                $query = $spyglass->connection()->table($table)
                     ->where($column, '<', now()->subDays((int) $days))
-                    ->delete();
+                    ->limit(1000);
+
+                // Short batches keep locks and the transaction log small on large tables.
+                $deleted = 0;
+
+                do {
+                    $deleted += $batch = $query->delete();
+                } while ($batch === 1000);
 
                 $this->components->twoColumnDetail($table, "{$deleted} deleted");
             }

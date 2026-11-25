@@ -4,7 +4,6 @@ namespace Keepsuit\Spyglass\Tests;
 
 use Illuminate\Container\Container;
 use Illuminate\Foundation\Application;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Facade;
@@ -14,9 +13,12 @@ use Keepsuit\Spyglass\Tests\Fixtures\TestModule;
 use Orchestra\Testbench\Concerns\WithLaravelMigrations;
 use Orchestra\Testbench\TestCase as Orchestra;
 
+/**
+ * No `RefreshDatabase`: flushes must run at transaction level 0 as in production. Testbench migrates
+ * before each test and rolls back after it.
+ */
 class TestCase extends Orchestra
 {
-    use RefreshDatabase;
     use WithLaravelMigrations;
 
     /** @var list<MessageLogged> */

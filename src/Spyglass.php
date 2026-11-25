@@ -34,7 +34,11 @@ class Spyglass
     /** @var array<string, array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>}>> */
     protected array $upserts = [];
 
+    protected int $buffered = 0;
+
     protected bool $ignoring = false;
+
+    protected ?int $reportedAt = null;
 
     /** @var (Closure(Request): bool)|null */
     protected ?Closure $authUsing = null;
@@ -116,13 +120,21 @@ class Spyglass
      */
     public function captureContext(): array
     {
-        $keys = config('spyglass.context.keys', []);
-        $context = $keys === [] ? [] : Context::only($keys);
+        return $this->ignore(function () {
+            try {
+                $keys = config('spyglass.context.keys', []);
+                $context = $keys === [] ? [] : Context::only($keys);
 
-        return [
-            'scope' => $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null,
-            'context' => $context === [] ? null : (json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: null),
-        ];
+                return [
+                    'scope' => $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null,
+                    'context' => $context === [] ? null : (json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: null),
+                ];
+            } catch (Throwable $e) {
+                $this->report('Spyglass failed to capture the context', $e);
+
+                return ['scope' => null, 'context' => null];
+            }
+        });
     }
 
     /**
@@ -141,6 +153,7 @@ class Spyglass
         }
 
         $this->inserts[$table][] = $row;
+        $this->trackBufferSize();
     }
 
     /**
@@ -160,10 +173,12 @@ class Spyglass
         }
 
         ksort($key);
-        $id = serialize($key);
+        // 1, '1' and true are the same row in the database, and one batch must not touch a row twice.
+        $id = serialize(array_map(fn ($value) => is_scalar($value) ? (string) (is_bool($value) ? (int) $value : $value) : $value, $key));
 
         if (! isset($this->upserts[$table][$id])) {
             $this->upserts[$table][$id] = ['key' => $key, 'values' => $values, 'increment' => $increment, 'max' => $max];
+            $this->trackBufferSize();
 
             return;
         }
@@ -181,7 +196,7 @@ class Spyglass
     }
 
     /**
-     * Write and clear the buffer. Storage errors are logged once and never thrown.
+     * Write and clear the buffer. Storage errors are logged at most once a minute and never thrown.
      */
     public function flush(): void
     {
@@ -191,20 +206,32 @@ class Spyglass
 
         [$inserts, $upserts] = [$this->inserts, $this->upserts];
         $this->inserts = $this->upserts = [];
+        $this->buffered = 0;
 
         $this->ignore(function () use ($inserts, $upserts) {
             try {
                 $db = $this->connection();
-
-                // Inside an open transaction a failed statement would abort it on PostgreSQL;
-                // a savepoint confines the failure to Spyglass.
-                $db->transactionLevel() > 0
-                    ? $db->transaction(fn () => $this->store($db, $inserts, $upserts))
-                    : $this->store($db, $inserts, $upserts);
+                // Connect once, so an unreachable server costs one timeout per flush instead of one per table.
+                $db->getPdo();
             } catch (Throwable $e) {
+                $this->report('Spyglass failed to store entries', $e);
+
+                return;
+            }
+
+            foreach ($inserts as $table => $rows) {
                 try {
-                    Log::error('Spyglass failed to store entries: '.$e->getMessage(), ['exception' => $e]);
-                } catch (Throwable) {
+                    $this->storeInserts($db, $table, $rows);
+                } catch (Throwable $e) {
+                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
+                }
+            }
+
+            foreach ($upserts as $table => $pending) {
+                try {
+                    $this->storeUpserts($db, $table, $pending);
+                } catch (Throwable $e) {
+                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
                 }
             }
         });
@@ -256,51 +283,98 @@ class Spyglass
     }
 
     /**
-     * @param  array<string, list<array<string, mixed>>>  $inserts
-     * @param  array<string, array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>}>>  $upserts
+     * Bounds memory in long-running processes that never end a lifecycle, such as `schedule:work` or daemons.
      */
-    protected function store(Connection $db, array $inserts, array $upserts): void
+    protected function trackBufferSize(): void
     {
-        foreach ($inserts as $table => $rows) {
-            foreach ($this->groupByColumns($rows) as $group) {
-                foreach (array_chunk($group, 500) as $chunk) {
-                    $db->table($table)->insert($chunk);
-                }
-            }
+        if (++$this->buffered > 1000) {
+            $this->flush();
+        }
+    }
+
+    /**
+     * Log an internal failure at most once a minute per process, so a storage outage does not flood the log.
+     * The timestamp stays in memory because the cache may be down too.
+     */
+    protected function report(string $message, Throwable $e): void
+    {
+        $now = now()->getTimestamp();
+
+        if ($this->reportedAt !== null && $now - $this->reportedAt < 60) {
+            return;
         }
 
-        foreach ($upserts as $table => $pending) {
-            $groups = [];
+        $this->reportedAt = $now;
 
-            foreach ($pending as $entry) {
-                $signature = array_map(function (array $columns) {
-                    ksort($columns);
-
-                    return array_keys($columns);
-                }, $entry);
-
-                $groups[serialize($signature)][] = $entry;
+        $this->ignore(function () use ($message, $e) {
+            try {
+                Log::error($message.': '.$e->getMessage(), ['exception' => $e]);
+            } catch (Throwable) {
             }
+        });
+    }
 
-            foreach ($groups as $group) {
-                $first = $group[0];
-                $update = array_keys($first['values']);
-
-                foreach (array_keys($first['increment']) as $column) {
-                    $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
-                }
-
-                foreach (array_keys($first['max']) as $column) {
-                    $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
-                }
-
-                $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'], $group);
-
-                foreach (array_chunk($rows, 500) as $chunk) {
-                    $db->table($table)->upsert($chunk, array_keys($first['key']), $update);
-                }
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     */
+    protected function storeInserts(Connection $db, string $table, array $rows): void
+    {
+        foreach ($this->groupByColumns($rows) as $group) {
+            foreach (array_chunk($group, $this->chunkSize($group[0])) as $chunk) {
+                $db->table($table)->insert($chunk);
             }
         }
+    }
+
+    /**
+     * @param  array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>}>  $pending
+     */
+    protected function storeUpserts(Connection $db, string $table, array $pending): void
+    {
+        // The same order in every process, so concurrent batches lock rows in the same sequence.
+        ksort($pending, SORT_STRING);
+
+        $groups = [];
+
+        foreach ($pending as $entry) {
+            $signature = array_map(function (array $columns) {
+                ksort($columns);
+
+                return array_keys($columns);
+            }, $entry);
+
+            $groups[serialize($signature)][] = $entry;
+        }
+
+        foreach ($groups as $group) {
+            $first = $group[0];
+            $update = array_keys($first['values']);
+
+            foreach (array_keys($first['increment']) as $column) {
+                $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
+            }
+
+            foreach (array_keys($first['max']) as $column) {
+                $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
+            }
+
+            $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'], $group);
+
+            foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
+                $db->table($table)->upsert($chunk, array_keys($first['key']), $update);
+            }
+        }
+    }
+
+    /**
+     * SQLite before 3.32 allows at most 999 bound parameters per statement.
+     *
+     * @param  array<string, mixed>  $row
+     * @return positive-int
+     */
+    protected function chunkSize(array $row): int
+    {
+        return max(1, intdiv(999, count($row)));
     }
 
     /**
@@ -338,9 +412,10 @@ class Spyglass
             default => throw new RuntimeException("Spyglass does not support the [{$db->getDriverName()}] database driver."),
         };
 
+        // The existing value is NULL when the row was created by an upsert that did not set this column.
         // @phpstan-ignore argument.type (built from wrapped column names declared by modules, never from input)
         return new Expression($operation === 'increment'
-            ? "{$existing} + {$incoming}"
-            : ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."({$existing}, {$incoming})");
+            ? "coalesce({$existing}, 0) + {$incoming}"
+            : ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."(coalesce({$existing}, {$incoming}), {$incoming})");
     }
 }
