@@ -18,13 +18,13 @@
     "require": {
         "php": "^8.3",
         "spatie/laravel-package-tools": "^1.16",
-        "illuminate/contracts": "^12.19 || ^13.0"
+        "illuminate/contracts": "^12.25 || ^13.0"
     },
     "require-dev": {
         "laravel/pint": "^1.14",
         "nunomaduro/collision": "^8.8",
         "larastan/larastan": "^3.0",
-        "orchestra/testbench": "^10.0 || ^11.0",
+        "orchestra/testbench": "^10.5 || ^11.0",
         "pestphp/pest": "^4.0",
         "pestphp/pest-plugin-arch": "^4.0",
         "pestphp/pest-plugin-laravel": "^4.0",
@@ -35,14 +35,12 @@
     },
     "autoload": {
         "psr-4": {
-            "Keepsuit\\Spyglass\\": "src/",
-            "Keepsuit\\Spyglass\\Database\\Factories\\": "database/factories/"
+            "Keepsuit\\Spyglass\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Keepsuit\\Spyglass\\Tests\\": "tests/",
-            "Workbench\\App\\": "workbench/app/"
+            "Keepsuit\\Spyglass\\Tests\\": "tests/"
         }
     },
     "scripts": {
