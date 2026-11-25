@@ -35,14 +35,12 @@
     },
     "autoload": {
         "psr-4": {
-            "Keepsuit\\Spyglass\\": "src/",
-            "Keepsuit\\Spyglass\\Database\\Factories\\": "database/factories/"
+            "Keepsuit\\Spyglass\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Keepsuit\\Spyglass\\Tests\\": "tests/",
-            "Workbench\\App\\": "workbench/app/"
+            "Keepsuit\\Spyglass\\Tests\\": "tests/"
         }
     },
     "scripts": {
