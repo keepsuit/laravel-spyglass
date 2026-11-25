@@ -28,6 +28,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 ## Known limitations
 
 - On Laravel versions without the overlap flag, a background run skipped for overlap mid-execution shows as interrupted.
+- On Laravel versions without the overlap flag, a sub-minute task skipped for overlap right after a failed execution can be recorded as failed.
 - On Laravel versions that do not pass the Context to background tasks, `schedule:finish` closes the newest open run of the task on the host, so overlapping background runs of the same task can swap outcomes.
 - `Bus::batch()` on the `database` queue driver does not fire `JobQueued`, so the `queued` counter undercounts batched jobs there.
 - On SQLite, a worker timeout inside an open database transaction loses the counters of that attempt.
