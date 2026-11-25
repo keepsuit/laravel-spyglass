@@ -41,6 +41,8 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 - `Bus::batch()` on the `database` queue driver does not fire `JobQueued`, so the `queued` counter undercounts batched jobs there.
 - On SQLite, a worker timeout inside an open database transaction loses the counters of that attempt.
 - A worker started directly on the target of a queue forward (`Queue::forward('a', 'b')`, worker on `b`) counts the attempts under `b`, while `queued` is counted under `a`.
+- The `spyglass` log driver exists only while Spyglass and its logs module are enabled. Otherwise a `stack` that lists `spyglass` falls back to Laravel's emergency logger, so remove it from the stack before disabling them.
+- Exception groups are pruned once their last occurrence is older than the `occurrences` retention; the `resolved_groups` retention is not applied yet.
 
 ## Requirements
 

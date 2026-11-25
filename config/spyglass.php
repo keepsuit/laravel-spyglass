@@ -80,11 +80,16 @@ return [
             'query_allowlist' => [],
         ],
 
+        // Add the `spyglass` channel to the application's stack in config/logging.php:
+        //   'stack' => ['driver' => 'stack', 'channels' => ['stderr', 'spyglass']],
+        //   'spyglass' => ['driver' => 'spyglass'],
         'logs' => [
             'enabled' => true,
             'retention' => [
                 'entries' => 7,
             ],
+            // Lowest level stored.
+            'level' => 'warning',
         ],
 
         'health' => [
