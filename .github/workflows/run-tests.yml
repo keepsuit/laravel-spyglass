@@ -22,22 +22,48 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest]
         php: [8.5, 8.3]
         laravel: [13.*, 12.*]
-        stability: [prefer-lowest, prefer-stable]
+        db: [sqlite, mysql, pgsql]
         include:
           - laravel: 13.*
             testbench: 11.*
           - laravel: 12.*
             testbench: 10.*
+          - db: mysql
+            db_port: 3306
+            db_username: root
+            db_password: ''
+          - db: pgsql
+            db_port: 5432
+            db_username: postgres
+            db_password: postgres
 
-    name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os }}
+    name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.db }}
+
+    # An empty image skips the service, so each job only starts the database it tests.
+    services:
+      mysql:
+        image: ${{ matrix.db == 'mysql' && 'mysql:8.4' || '' }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
+      pgsql:
+        image: ${{ matrix.db == 'pgsql' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testing
+        ports:
+          - 5432:5432
+        options: --health-cmd=pg_isready --health-interval=10s --health-timeout=5s --health-retries=5
 
     steps:
       - name: Checkout code
@@ -47,7 +73,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, bcmath, soap, intl, gd, exif, iconv, imagick, fileinfo
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, pdo_mysql, pdo_pgsql, bcmath, intl, fileinfo
           coverage: none
 
       - name: Setup problem matchers
@@ -58,10 +84,17 @@ jobs:
       - name: Install dependencies
         run: |
           composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update
-          composer update --${{ matrix.stability }} --prefer-dist --no-interaction
+          composer update --prefer-stable --prefer-dist --no-interaction
 
       - name: List Installed Dependencies
         run: composer show -D
 
       - name: Execute tests
         run: vendor/bin/pest --ci
+        env:
+          DB_CONNECTION: ${{ matrix.db == 'sqlite' && 'testing' || matrix.db }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.db_port }}
+          DB_DATABASE: testing
+          DB_USERNAME: ${{ matrix.db_username }}
+          DB_PASSWORD: ${{ matrix.db_password }}
