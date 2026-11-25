@@ -108,6 +108,10 @@ class SpyglassServiceProvider extends PackageServiceProvider
         // calling request or job, whose lifecycle still owns the entries.
         $this->app->terminating($flush);
 
+        // After Laravel's own shutdown handler, which reports fatal errors, and after `terminating` callbacks
+        // registered later, such as `dispatch()->afterResponse()`.
+        register_shutdown_function($flush);
+
         Event::listen([
             // The worker reports a job's exception after `JobAttempted`.
             Looping::class,
