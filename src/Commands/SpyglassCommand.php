@@ -1,12 +1,12 @@
 <?php
 
-namespace VendorName\Skeleton\Commands;
+namespace Keepsuit\Spyglass\Commands;
 
 use Illuminate\Console\Command;
 
-class SkeletonCommand extends Command
+class SpyglassCommand extends Command
 {
-    public $signature = 'skeleton';
+    public $signature = 'laravel-spyglass';
 
     public $description = 'My command';
 
