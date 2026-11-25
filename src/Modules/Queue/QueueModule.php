@@ -2,6 +2,7 @@
 
 namespace Keepsuit\Spyglass\Modules\Queue;
 
+use Closure;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
@@ -9,15 +10,20 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobQueued;
 use Illuminate\Queue\Events\JobTimedOut;
 use Illuminate\Queue\Failed\DatabaseFailedJobProvider;
+use Illuminate\Queue\Failed\DatabaseUuidFailedJobProvider;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
+use Illuminate\Queue\Failed\FileFailedJobProvider;
 use Illuminate\Queue\Failed\NullFailedJobProvider;
-use Illuminate\Queue\Jobs\JobName;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Throwable;
 use WeakMap;
+
+use function Illuminate\Support\enum_value;
 
 /**
  * Sync jobs are left out: they are never queued and never reach the failer.
@@ -43,44 +49,88 @@ class QueueModule extends Module
 
     public function boot(): void
     {
-        Event::listen(JobQueued::class, function (JobQueued $event) {
+        $this->listen(JobQueued::class, function (JobQueued $event) {
             $payload = json_decode($event->payload, true);
 
             $this->count(
                 $event->connectionName,
-                $event->queue ?? config("queue.connections.{$event->connectionName}.queue") ?? 'default',
-                JobName::resolve($payload['job'] ?? '', $payload),
+                $this->queueName($event->connectionName, $event->queue),
+                $this->jobName($payload),
                 'queued',
                 config('spyglass.modules.queue.aggregate_by_scope') ? Spyglass::captureContext()['scope'] : null,
             );
         });
 
         // Laravel hydrates the Context from the payload before this runs. Tenancy may revert it before the job fails.
-        Event::listen(JobProcessing::class, function (JobProcessing $event) {
+        $this->listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
                 $this->attempts[$event->job] = ['started' => hrtime(true), ...Spyglass::captureContext()];
             }
         });
 
-        Event::listen(JobFailed::class, fn (JobFailed $event) => $this->recordFailure($event, app(FailedJobProviderInterface::class)));
+        $this->listen(JobFailed::class, fn (JobFailed $event) => $this->recordFailure($event, app(FailedJobProviderInterface::class)));
 
         // `JobProcessed` also fires after a manual `fail()` or `release()` and when max tries are exceeded,
-        // so the outcome is read from the job state when the attempt ends.
-        Event::listen(JobAttempted::class, fn (JobAttempted $event) => $this->countAttempt(
+        // so the outcome is read from the job state when the attempt ends. A job that deleted itself and
+        // then threw is neither failed nor released.
+        $this->listen(JobAttempted::class, fn (JobAttempted $event) => $this->countAttempt(
             $event->job,
             match (true) {
                 $event->job->hasFailed() => 'failed',
                 $event->job->isReleased() => 'released',
+                ! $event->successful() => 'failed',
                 default => 'processed',
             },
         ));
 
         // On timeout the worker exits right after this event, so `JobAttempted` never fires and the
         // attempt, and the failed row of a last try, are stored now.
-        Event::listen(JobTimedOut::class, function (JobTimedOut $event) {
+        $this->listen(JobTimedOut::class, function (JobTimedOut $event) {
             $this->countAttempt($event->job, $event->job->hasFailed() ? 'failed' : 'timed_out');
 
             Spyglass::flush();
+        });
+    }
+
+    /**
+     * The same queue name on dispatch and in the worker. SQS workers report the queue URL.
+     */
+    protected function queueName(string $connection, mixed $queue): string
+    {
+        $queue = (string) (enum_value($queue) ?? config("queue.connections.{$connection}.queue") ?? 'default');
+
+        return filter_var($queue, FILTER_VALIDATE_URL) === false ? $queue : Str::afterLast(rtrim($queue, '/'), '/');
+    }
+
+    /**
+     * The job class, since a custom `displayName()` may embed ids. Framework wrappers (queued listeners,
+     * mailables, notifications, ...) are named after the class they wrap, as their display name is.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function jobName(array $payload): string
+    {
+        $class = $payload['data']['commandName'] ?? null;
+
+        return is_string($class) && ! str_starts_with($class, 'Illuminate\\')
+            ? $class
+            : (string) ($payload['displayName'] ?? $class ?? $payload['job'] ?? 'unknown');
+    }
+
+    /**
+     * Recording must never break the host: an exception in a `JobQueued` listener reaches the dispatching
+     * code after the job is stored, and one in `JobFailed` would skip the failer, whose listener runs later.
+     *
+     * @param  class-string  $event
+     */
+    protected function listen(string $event, Closure $listener): void
+    {
+        Event::listen($event, function (object $payload) use ($listener) {
+            try {
+                $listener($payload);
+            } catch (Throwable $e) {
+                Spyglass::report('Spyglass failed to record a queue event', $e);
+            }
         });
     }
 
@@ -97,12 +147,25 @@ class QueueModule extends Module
      */
     public function prune(): array
     {
-        $failer = app(FailedJobProviderInterface::class);
+        return $this->pruneIndex(app(FailedJobProviderInterface::class));
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    protected function pruneIndex(FailedJobProviderInterface $failer): array
+    {
         $db = Spyglass::connection();
+        // Rows indexed after the ids are read would look missing.
+        $lastId = $db->table(self::FAILED_JOBS)->max('id');
+        // Other providers may return a partial list, e.g. DynamoDB one page of results.
+        $ids = $failer instanceof DatabaseUuidFailedJobProvider || $failer instanceof FileFailedJobProvider
+            ? array_flip(array_map(strval(...), $failer->ids()))
+            : null;
         $deleted = 0;
 
-        $db->table(self::FAILED_JOBS)->select(['id', 'uuid'])->chunkById(500, function ($rows) use ($failer, $db, &$deleted) {
-            $missing = $rows->filter(fn (object $row) => $failer->find($row->uuid) === null)->pluck('id');
+        $db->table(self::FAILED_JOBS)->select(['id', 'uuid'])->where('id', '<=', $lastId ?? 0)->chunkById(500, function ($rows) use ($failer, $ids, $db, &$deleted) {
+            $missing = $rows->filter(fn (object $row) => $ids === null ? $failer->find($row->uuid) === null : ! isset($ids[$row->uuid]))->pluck('id');
 
             if ($missing->isNotEmpty()) {
                 $deleted += $db->table(self::FAILED_JOBS)->whereIn('id', $missing)->delete();
@@ -128,11 +191,10 @@ class QueueModule extends Module
         // `queue:retry` keeps the uuid, so a retried job that fails again updates its row.
         Spyglass::upsert(self::FAILED_JOBS, ['uuid' => $uuid], values: [
             'connection' => mb_substr($event->connectionName, 0, 64),
-            'queue' => mb_substr($job->getQueue(), 0, 191),
-            'job' => mb_substr($job->resolveName(), 0, 255),
+            'queue' => mb_substr($this->queueName($event->connectionName, $job->getQueue()), 0, 191),
+            'job' => mb_substr($this->jobName($job->payload()), 0, 255),
             'attempts' => $job->attempts(),
             'exception_class' => mb_substr($event->exception::class, 0, 255),
-            'exception_message' => mb_substr($event->exception->getMessage(), 0, 2000),
             'fingerprint' => ExceptionFingerprint::for($event->exception),
             'scope' => $snapshot['scope'] === null ? null : mb_substr($snapshot['scope'], 0, 191),
             'context' => $snapshot['context'],
@@ -155,8 +217,8 @@ class QueueModule extends Module
 
         $this->count(
             $job->getConnectionName(),
-            $job->getQueue(),
-            $job->resolveName(),
+            $this->queueName($job->getConnectionName(), $job->getQueue()),
+            $this->jobName($job->payload()),
             $outcome,
             $attempt['scope'],
             (int) round((hrtime(true) - $attempt['started']) / 1e6),
@@ -168,7 +230,11 @@ class QueueModule extends Module
      */
     protected function count(string $connection, string $queue, string $job, string $counter, ?string $scope, ?int $duration = null): void
     {
-        $now = now();
+        // UTC, so the repeated hour when DST ends does not merge two buckets.
+        $now = now()->utc();
+
+        // Every counter on every row: one column shape, so one statement per flush.
+        $counters = ['queued' => 0, 'processed' => 0, 'failed' => 0, 'released' => 0, 'timed_out' => 0];
 
         Spyglass::upsert(self::AGGREGATES, [
             // A string, so keys of the same bucket merge in the buffer.
@@ -177,6 +243,6 @@ class QueueModule extends Module
             'queue' => mb_substr($queue, 0, 191),
             'job' => mb_substr($job, 0, 255),
             'scope' => config('spyglass.modules.queue.aggregate_by_scope') ? mb_substr($scope ?? '', 0, 191) : '',
-        ], increment: [$counter => 1, ...($duration === null ? [] : ['duration_sum' => $duration])], max: $duration === null ? [] : ['duration_max' => $duration]);
+        ], increment: [$counter => 1, 'duration_sum' => $duration ?? 0] + $counters, max: ['duration_max' => $duration ?? 0]);
     }
 }

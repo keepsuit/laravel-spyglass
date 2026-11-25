@@ -12,9 +12,9 @@ class QueueJob implements ShouldQueue
     use Queueable;
 
     /**
-     * @param  'succeed'|'throw'|'fail'|'release'|'sleep'|'forget-context'  $action
+     * @param  'succeed'|'throw'|'fail'|'release'|'sleep'|'pause'|'delete-throw'|'dispatch'|'forget-context'  $action
      */
-    public function __construct(public string $action = 'succeed') {}
+    public function __construct(public string $action = 'succeed', public ?string $displayName = null) {}
 
     public function handle(): void
     {
@@ -22,12 +22,23 @@ class QueueJob implements ShouldQueue
             Context::forget('tenant');
         }
 
+        if ($this->action === 'delete-throw') {
+            $this->delete();
+        }
+
         match ($this->action) {
-            'throw', 'forget-context' => throw new RuntimeException('Job failed'),
+            'throw', 'forget-context', 'delete-throw' => throw new RuntimeException('Job failed'),
             'fail' => $this->fail(new RuntimeException('Failed manually')),
             'release' => $this->release(),
             'sleep' => sleep(3),
+            'pause' => usleep(50_000),
+            'dispatch' => self::dispatch()->onQueue('other'),
             default => null,
         };
+    }
+
+    public function displayName(): string
+    {
+        return $this->displayName ?? static::class;
     }
 }

@@ -22,7 +22,7 @@ function queueIndexFailedJob(string $uuid, array $values = []): void
 {
     DB::table(QueueModule::FAILED_JOBS)->insert([
         'uuid' => $uuid, 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
-        'exception_class' => 'E', 'exception_message' => 'm', 'fingerprint' => str_repeat('a', 40), 'failed_at' => now(),
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => now(),
         ...$values,
     ]);
 }

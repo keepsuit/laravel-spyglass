@@ -298,8 +298,10 @@ class Spyglass
     /**
      * Log an internal failure at most once a minute per process, so a storage outage does not flood the log.
      * The timestamp stays in memory because the cache may be down too.
+     *
+     * @internal
      */
-    protected function report(string $message, Throwable $e): void
+    public function report(string $message, Throwable $e): void
     {
         $now = now()->getTimestamp();
 

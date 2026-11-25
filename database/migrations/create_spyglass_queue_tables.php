@@ -42,7 +42,6 @@ return new class extends Migration
             $table->string('job', 255);
             $table->unsignedInteger('attempts');
             $table->string('exception_class', 255);
-            $table->text('exception_message');
             $table->char('fingerprint', 40);
             $table->string('scope', 191)->nullable();
             $table->json('context')->nullable();
