@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Modules\Module;
+use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use RuntimeException;
 use Throwable;
 
@@ -26,7 +27,9 @@ class Spyglass
      *
      * @var array<string, class-string<Module>>
      */
-    public static array $modules = [];
+    public static array $modules = [
+        'queue' => QueueModule::class,
+    ];
 
     /** @var array<string, list<array<string, mixed>>> */
     protected array $inserts = [];
