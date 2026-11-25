@@ -32,6 +32,10 @@ class SpyglassServiceProvider extends PackageServiceProvider
                 'create_spyglass_queue_tables',
             ])
             ->hasCommand(PruneCommand::class);
+
+        $package->hasMigrations([
+            'create_spyglass_exceptions_tables',
+        ]);
     }
 
     public function packageRegistered(): void

@@ -76,6 +76,8 @@ return [
                 'occurrences' => 30,
                 'resolved_groups' => 30,
             ],
+            // Query string keys stored with their value. Every other value is stored as `***`.
+            'query_allowlist' => [],
         ],
 
         'logs' => [

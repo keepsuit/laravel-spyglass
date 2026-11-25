@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
+use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
@@ -31,6 +32,7 @@ class Spyglass
     public static array $modules = [
         'schedule' => ScheduleModule::class,
         'queue' => QueueModule::class,
+        'exceptions' => ExceptionsModule::class,
     ];
 
     /** @var array<string, list<array<string, mixed>>> */
