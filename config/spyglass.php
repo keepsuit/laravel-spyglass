@@ -50,6 +50,8 @@ return [
             'retention' => [
                 'runs' => 30,
             ],
+            // Seconds after a due time before a task without a run is reported as missed.
+            'missed_after' => 90,
         ],
 
         'queue' => [
