@@ -126,17 +126,21 @@ it('does not report tasks of other environments as missed', function () {
     expect(scheduledTask('report')['missed'])->toBeFalse();
 });
 
-it('computes the due time in the task timezone', function () {
-    // 09:00 in New York is 14:00 UTC.
-    insertTask('report', '0 9 * * *', ['timezone' => 'America/New_York']);
-    insertRun('report', '2025-12-31 14:00:05');
+it('computes the due time in the task timezone, across both repeated hours of a fall-back night', function () {
+    // On 2026-10-25 Rome goes from 03:00 CEST back to 02:00 CET: 02:30 happens at 00:30 and at 01:30 UTC.
+    insertTask('report', '30 2 * * *', ['timezone' => 'Europe/Rome']);
+    insertRun('report', '2026-10-25 00:30:05');
 
-    Date::setTestNow('2026-01-01 10:00:00');
+    Date::setTestNow('2026-10-25 00:40:00');
     expect(scheduledTask('report')['missed'])->toBeFalse()
-        ->and(scheduledTask('report')['next_run']->utc()->toDateTimeString())->toBe('2026-01-01 14:00:00');
+        ->and(scheduledTask('report')['next_run']->utc()->toDateTimeString())->toBe('2026-10-25 01:30:00');
 
-    Date::setTestNow('2026-01-01 14:05:00');
+    Date::setTestNow('2026-10-25 01:35:00');
     expect(scheduledTask('report')['missed'])->toBeTrue();
+
+    insertRun('report', '2026-10-25 01:30:05');
+    expect(scheduledTask('report')['missed'])->toBeFalse()
+        ->and(scheduledTask('report')['next_run']->utc()->toDateTimeString())->toBe('2026-10-26 01:30:00');
 });
 
 it('computes the next run and the due time of sub-minute tasks from their interval', function () {

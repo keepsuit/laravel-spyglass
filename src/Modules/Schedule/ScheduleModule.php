@@ -3,9 +3,11 @@
 namespace Keepsuit\Spyglass\Modules\Schedule;
 
 use BackedEnum;
+use Carbon\CarbonInterface;
 use Closure;
 use Cron\CronExpression;
 use DateTimeZone;
+use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
@@ -27,7 +29,7 @@ use Throwable;
 use WeakMap;
 
 /**
- * The scheduler publishes its task list on every `schedule:run` and records one row per execution, keyed by
+ * The scheduler publishes its task list at the end of every `schedule:run` and records one row per execution, keyed by
  * an id generated when the task starts: every write of a run is an upsert on it, so the buffered `running`
  * row (flushed at `ScheduledTaskStarting`) and its closing write are the same row. Skips are not runs: they
  * only update the task row.
@@ -63,6 +65,12 @@ class ScheduleModule extends Module
     /** @var array<string, array{reason: ?string, at: int}> last skip written per task key */
     protected array $skips = [];
 
+    /** @var array<string, array{last_skipped_at: string, last_skip_reason: ?string}> last skip of each task key in this tick */
+    protected array $lastSkips = [];
+
+    /** When the current `schedule:run` started: the time its publication reports. */
+    protected ?CarbonInterface $tick = null;
+
     public function __construct()
     {
         $this->current = new WeakMap;
@@ -72,15 +80,23 @@ class ScheduleModule extends Module
     public function boot(): void
     {
         // `schedule:work` runs `schedule:run` every minute, so this covers both.
-        Event::listen(CommandStarting::class, function (CommandStarting $event) {
+        $this->on(CommandStarting::class, function (CommandStarting $event) {
             if ($event->command === 'schedule:run') {
-                $this->publish();
+                $this->tick = Date::now();
             }
         });
 
-        Event::listen(ScheduledTaskStarting::class, fn (ScheduledTaskStarting $event) => $this->start($event->task));
+        // After the due tasks ran: a slow database must never delay their evaluation.
+        $this->on(CommandFinished::class, function (CommandFinished $event) {
+            if ($event->command === 'schedule:run' && $this->tick !== null) {
+                $this->publish($this->tick);
+                $this->tick = null;
+            }
+        });
 
-        Event::listen(ScheduledTaskFinished::class, function (ScheduledTaskFinished $event) {
+        $this->on(ScheduledTaskStarting::class, fn (ScheduledTaskStarting $event) => $this->start($event->task));
+
+        $this->on(ScheduledTaskFinished::class, function (ScheduledTaskFinished $event) {
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
@@ -105,7 +121,7 @@ class ScheduleModule extends Module
             // Background tasks are still running: `schedule:finish` reports their outcome.
         });
 
-        Event::listen(ScheduledTaskFailed::class, function (ScheduledTaskFailed $event) {
+        $this->on(ScheduledTaskFailed::class, function (ScheduledTaskFailed $event) {
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
@@ -118,7 +134,7 @@ class ScheduleModule extends Module
             }
         });
 
-        Event::listen(ScheduledTaskSkipped::class, function (ScheduledTaskSkipped $event) {
+        $this->on(ScheduledTaskSkipped::class, function (ScheduledTaskSkipped $event) {
             // Missing on older Laravel 12 releases.
             $reason = data_get($event, 'reason');
 
@@ -126,7 +142,7 @@ class ScheduleModule extends Module
         });
 
         // Fired by `schedule:finish` in a process of its own.
-        Event::listen(ScheduledBackgroundTaskFinished::class, fn (ScheduledBackgroundTaskFinished $event) => $this->finishInBackground($event->task));
+        $this->on(ScheduledBackgroundTaskFinished::class, fn (ScheduledBackgroundTaskFinished $event) => $this->finishInBackground($event->task));
     }
 
     public function prunable(): array
@@ -203,13 +219,25 @@ class ScheduleModule extends Module
     }
 
     /**
-     * Upsert every task of the schedule in one statement, keeping `first_seen_at` and the last skip.
+     * Upsert every task of the schedule as seen at `$tick`, keeping `first_seen_at`, with the last skip of
+     * each task skipped in this tick: one statement for the skipped tasks and one for the others.
      */
-    protected function publish(): void
+    protected function publish(CarbonInterface $tick): void
     {
-        $this->guard('Spyglass failed to publish the schedule', function () {
+        $this->guard('Spyglass failed to publish the schedule', function () use ($tick) {
             $tasks = array_values(app(Schedule::class)->events());
-            $now = $this->now();
+            $seen = $this->stamp($tick);
+
+            // Laravel leaves due tasks out silently while the application is down.
+            if (app()->isDownForMaintenance()) {
+                foreach ($tasks as $task) {
+                    if (! $task->runsInMaintenanceMode() && $task->runsInEnvironment(app()->environment())
+                        && (new CronExpression($task->getExpression()))->isDue($tick, static::timezone($task))) {
+                        $this->lastSkips[$this->identityOf($task)['key']] = ['last_skipped_at' => $seen, 'last_skip_reason' => 'maintenance'];
+                    }
+                }
+            }
+
             $rows = [];
 
             foreach ($tasks as $task) {
@@ -222,8 +250,9 @@ class ScheduleModule extends Module
                     'repeat_seconds' => $task->repeatSeconds,
                     'timezone' => static::timezone($task),
                     'environments' => $task->environments === [] ? null : json_encode(array_values($task->environments)),
-                    'first_seen_at' => $now,
-                    'last_seen_at' => $now,
+                    'first_seen_at' => $seen,
+                    'last_seen_at' => $seen,
+                    ...($this->lastSkips[$identity['key']] ?? []),
                 ];
             }
 
@@ -231,19 +260,16 @@ class ScheduleModule extends Module
             ksort($rows, SORT_STRING);
             $update = ['label', 'command', 'description', 'expression', 'repeat_seconds', 'timezone', 'environments', 'last_seen_at'];
 
-            foreach (array_chunk($rows, 80) as $chunk) {
-                Spyglass::connection()->table(self::TASKS)->upsert($chunk, ['key'], $update);
-            }
+            foreach ([false, true] as $skipped) {
+                $group = array_filter($rows, fn (array $row) => array_key_exists('last_skip_reason', $row) === $skipped);
 
-            // Laravel leaves due tasks out silently while the application is down.
-            if (app()->isDownForMaintenance()) {
-                foreach ($tasks as $task) {
-                    if (! $task->runsInMaintenanceMode() && $task->runsInEnvironment(app()->environment())
-                        && (new CronExpression($task->getExpression()))->isDue(Date::now(), static::timezone($task))) {
-                        $this->skip($task, 'maintenance');
-                    }
+                foreach (array_chunk($group, 80) as $chunk) {
+                    Spyglass::connection()->table(self::TASKS)
+                        ->upsert($chunk, ['key'], $skipped ? [...$update, 'last_skipped_at', 'last_skip_reason'] : $update);
                 }
             }
+
+            $this->lastSkips = [];
         });
     }
 
@@ -252,6 +278,12 @@ class ScheduleModule extends Module
         if (isset($this->current[$task])) {
             unset($this->runs[$this->current[$task]]);
         }
+
+        // On its own: a failure leaves the run without output instead of unrecorded.
+        $offset = null;
+        $this->safely('Spyglass failed to read the output size of a scheduled task', function () use ($task, &$offset) {
+            $offset = $this->outputOffset($task);
+        });
 
         $id = (string) Str::ulid();
         $row = [
@@ -262,7 +294,7 @@ class ScheduleModule extends Module
             'status' => 'running',
             'exit_code' => null,
             'output' => null,
-            'output_offset' => $this->outputOffset($task),
+            'output_offset' => $offset,
             'host' => $this->host(),
             ...Spyglass::captureContext(),
         ];
@@ -295,38 +327,37 @@ class ScheduleModule extends Module
 
     /**
      * Close the run that the background process was started for, or, when Laravel does not pass the Context
-     * on, the newest one still open for the task on this host.
+     * on, the only one still open for the task on this host. Ambiguous runs stay open and show as interrupted.
      */
     protected function finishInBackground(Task $task): void
     {
         $this->guard('Spyglass failed to close a background run', function () use ($task) {
             $id = Context::getHidden(self::CONTEXT_RUN);
-            $runs = fn () => Spyglass::connection()->table(self::RUNS)->where('status', 'running');
+            // A replica may not have the start of the run yet.
+            $runs = fn () => Spyglass::connection()->table(self::RUNS)->useWritePdo()->where('status', 'running');
 
-            // Retried only without an id: another finisher may close the run between the lookup and the update.
-            for ($attempt = 0; $attempt < 3; $attempt++) {
-                $run = is_string($id)
-                    ? $runs()->where('id', $id)->first()
-                    : $runs()->where('task', $this->identityOf($task)['key'])->where('host', $this->host())
-                        ->orderByDesc('started_at')->orderByDesc('id')->first();
-
-                if ($run === null) {
-                    return;
-                }
-
-                $run = (array) $run;
-                $closed = $runs()->where('id', $run['id'])->update([
-                    'finished_at' => $this->now(),
-                    'duration_ms' => max(0, (int) Date::parse($run['started_at'], 'UTC')->diffInMilliseconds(Date::now())),
-                    'status' => $task->exitCode === 0 ? 'success' : 'failed',
-                    'exit_code' => $task->exitCode,
-                    'output' => $this->output($task, $run['output_offset'] === null ? null : (int) $run['output_offset']),
-                ]);
-
-                if ($closed > 0 || is_string($id)) {
-                    return;
-                }
+            if (is_string($id)) {
+                $run = $runs()->where('id', $id)->first();
+            } else {
+                // Bounded, so a run left open by a crash does not make every later one ambiguous.
+                $open = $runs()->where('task', $this->identityOf($task)['key'])->where('host', $this->host())
+                    ->where('started_at', '>=', $this->stamp(Date::now()->subSeconds((int) config('spyglass.modules.schedule.interrupted_after', 86400))))
+                    ->limit(2)->get();
+                $run = $open->count() === 1 ? $open->first() : null;
             }
+
+            if ($run === null) {
+                return;
+            }
+
+            $run = (array) $run;
+            $runs()->where('id', $run['id'])->update([
+                'finished_at' => $this->now(),
+                'duration_ms' => max(0, (int) Date::parse($run['started_at'], 'UTC')->diffInMilliseconds(Date::now())),
+                'status' => $task->exitCode === 0 ? 'success' : 'failed',
+                'exit_code' => $task->exitCode,
+                'output' => $this->output($task, $run['output_offset'] === null ? null : (int) $run['output_offset']),
+            ]);
         });
     }
 
@@ -336,7 +367,7 @@ class ScheduleModule extends Module
     }
 
     /**
-     * Record a skip on the task row.
+     * Record a skip on the task row. The tick publication writes the last one in any case.
      */
     protected function skip(Task $task, ?string $reason): void
     {
@@ -349,17 +380,14 @@ class ScheduleModule extends Module
             $key = $this->identityOf($task)['key'];
             $now = Date::now()->getTimestamp();
             $last = $this->skips[$key] ?? null;
+            $this->lastSkips[$key] = ['last_skipped_at' => $this->now(), 'last_skip_reason' => $reason];
 
             if ($last !== null && $last['reason'] === $reason && $now - $last['at'] < self::SKIP_WRITE_INTERVAL) {
                 return;
             }
 
+            Spyglass::connection()->table(self::TASKS)->where('key', $key)->update($this->lastSkips[$key]);
             $this->skips[$key] = ['reason' => $reason, 'at' => $now];
-
-            Spyglass::connection()->table(self::TASKS)->where('key', $key)->update([
-                'last_skipped_at' => $this->now(),
-                'last_skip_reason' => $reason,
-            ]);
         });
     }
 
@@ -381,17 +409,35 @@ class ScheduleModule extends Module
     }
 
     /**
+     * A listener whose failures are reported, never thrown into the scheduler or the task.
+     *
+     * @param  class-string  $event
+     */
+    protected function on(string $event, Closure $listener): void
+    {
+        Event::listen($event, fn (object $payload) => $this->safely('Spyglass failed to record the schedule', fn () => $listener($payload)));
+    }
+
+    /**
+     * Direct writes, not recorded by Spyglass. Buffered writes are dropped inside: use `safely()` for them.
+     *
      * @param  Closure(): mixed  $callback
      */
     protected function guard(string $message, Closure $callback): void
     {
-        Spyglass::ignore(function () use ($message, $callback) {
-            try {
-                $callback();
-            } catch (Throwable $e) {
-                Spyglass::report($message, $e);
-            }
-        });
+        Spyglass::ignore(fn () => $this->safely($message, $callback));
+    }
+
+    /**
+     * @param  Closure(): mixed  $callback
+     */
+    protected function safely(string $message, Closure $callback): void
+    {
+        try {
+            $callback();
+        } catch (Throwable $e) {
+            Spyglass::report($message, $e);
+        }
     }
 
     protected function outputPath(Task $task): ?string
@@ -416,7 +462,14 @@ class ScheduleModule extends Module
 
         clearstatcache(true, $path);
 
-        return is_file($path) ? (int) filesize($path) : null;
+        // Not null: in append mode that means the offset is unknown.
+        if (! is_file($path)) {
+            return 0;
+        }
+
+        $size = filesize($path);
+
+        return $size !== false ? $size : throw new RuntimeException("Cannot read the size of [{$path}]");
     }
 
     /**
@@ -426,7 +479,8 @@ class ScheduleModule extends Module
     {
         $path = $this->outputPath($task);
 
-        if ($path === null || ! is_file($path)) {
+        // An appended file without the offset would show the output of earlier runs.
+        if ($path === null || ($offset === null && $task->shouldAppendOutput) || ! is_file($path)) {
             return null;
         }
 
@@ -454,6 +508,11 @@ class ScheduleModule extends Module
 
     protected function now(): string
     {
-        return Date::now('UTC')->format('Y-m-d H:i:s.v');
+        return $this->stamp(Date::now());
+    }
+
+    protected function stamp(CarbonInterface $time): string
+    {
+        return $time->copy()->utc()->format('Y-m-d H:i:s.v');
     }
 }

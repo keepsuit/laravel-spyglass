@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
@@ -50,9 +51,14 @@ function taskKey(Event $task): string
     return ScheduleModule::identities($tasks)[array_search($task, $tasks, true)]['key'];
 }
 
-function publishSchedule(): void
+/**
+ * A `schedule:run` tick: what runs in `$during` happens between its start and its publication.
+ */
+function publishSchedule(?Closure $during = null): void
 {
     event(new CommandStarting('schedule:run', new ArrayInput([]), new NullOutput));
+    $during?->__invoke();
+    event(new CommandFinished('schedule:run', new ArrayInput([]), new NullOutput, 0));
 }
 
 function outputFile(string $contents = ''): string
@@ -167,6 +173,39 @@ it('publishes the schedule in a single statement', function () {
     // And the prune command Spyglass schedules.
     expect($queries)->toHaveCount(1)
         ->and(DB::table(ScheduleModule::TASKS)->count())->toBe(6);
+});
+
+it('publishes the schedule after the due tasks ran, as seen when the tick started', function () {
+    $this->travelTo(now()->setTime(23, 59));
+    $task = app(Schedule::class)->exec('true')->dailyAt('23:59');
+
+    // A publication slow enough to cross midnight.
+    Spyglass::connection()->listen(function (QueryExecuted $query) {
+        if (str_contains($query->sql, ScheduleModule::TASKS)) {
+            $this->travel(2)->minutes();
+        }
+    });
+
+    $this->artisan('schedule:run');
+
+    expect(scheduleRuns()->pluck('task')->all())->toBe([taskKey($task)])
+        ->and(substr(scheduleTask($task)->last_seen_at, 11, 5))->toBe('23:59');
+});
+
+it('runs the due tasks when the publication fails', function () {
+    app(Schedule::class)->exec('true')->everyMinute();
+    Spyglass::connection()->beforeExecuting(function (string $sql) {
+        // Only the publication: the callback outlives the test, into the rollback of the migrations.
+        if (str_starts_with(strtolower($sql), 'insert') && str_contains($sql, ScheduleModule::TASKS)) {
+            throw new RuntimeException('Database down');
+        }
+    });
+
+    $this->artisan('schedule:run');
+
+    expect(scheduleRuns()->pluck('status')->all())->toBe(['success'])
+        ->and($this->spyglassErrors[0]->message)->toStartWith('Spyglass failed to publish the schedule');
+    $this->spyglassErrors = [];
 });
 
 it('records a successful run', function () {
@@ -315,6 +354,39 @@ it('writes repeated skips of a sub-minute task at most every 30 seconds', functi
     expect($writes)->toBe(2);
 });
 
+it('records the last skip of the tick, however recent the previous write', function () {
+    $task = app(Schedule::class)->call(fn () => null)->name('filtered')->everyTenSeconds()->when(false);
+
+    publishSchedule(function () use ($task) {
+        foreach (range(0, 50, 10) as $second) {
+            $this->travelTo(now()->setTime(12, 0, $second));
+            event(new ScheduledTaskSkipped($task));
+        }
+    });
+
+    expect(substr(scheduleTask($task)->last_skipped_at, 11, 8))->toBe('12:00:50');
+});
+
+it('writes the next skip when the previous write failed', function () {
+    $task = app(Schedule::class)->call(fn () => null)->name('filtered')->everyTenSeconds()->when(false);
+    publishSchedule();
+
+    $failed = false;
+    Spyglass::connection()->beforeExecuting(function (string $sql) use (&$failed) {
+        if (! $failed && str_starts_with(strtolower($sql), 'update')) {
+            $failed = true;
+            throw new RuntimeException('Database down');
+        }
+    });
+
+    event(new ScheduledTaskSkipped($task));
+    $this->travel(10)->seconds();
+    event(new ScheduledTaskSkipped($task));
+
+    expect(substr(scheduleTask($task)->last_skipped_at, 11, 8))->toBe('12:00:10');
+    $this->spyglassErrors = [];
+});
+
 it('records due tasks left out while the application is down for maintenance', function () {
     $down = app(Schedule::class)->exec('true')->everyMinute();
     $notDue = app(Schedule::class)->exec('false')->dailyAt('03:00');
@@ -401,26 +473,47 @@ it('closes a background run once when identical tasks share a mutex', function (
     expect(scheduleRuns()->pluck('status', 'task')->all())->toBe([taskKey($first) => 'success', taskKey($second) => 'running']);
 })->skip(! contextReachesBackgroundProcesses(), 'Requires Laravel to pass the Context to background processes');
 
-it('does not leave a background run open when another finisher closes it first', function () {
+it('closes a background run without the Context only when it is the only one open on the host', function (int $open) {
     $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
 
-    startInBackground($task);
-    $this->travel(1)->minute();
-    startInBackground($task);
-    [$older, $newer] = scheduleRuns()->pluck('id')->all();
-
-    // Without the Context the newest open run is looked up: another finisher closes it in between.
-    $raced = false;
-    Spyglass::connection()->listen(function (QueryExecuted $query) use (&$raced, $newer) {
-        if (! $raced && str_starts_with(strtolower($query->sql), 'select')) {
-            $raced = true;
-            DB::table(ScheduleModule::RUNS)->where('id', $newer)->update(['status' => 'success']);
-        }
-    });
+    foreach (range(1, $open) as $i) {
+        startInBackground($task);
+        $this->travel(1)->minute();
+    }
 
     finishInBackground($task, 0);
 
-    expect(scheduleRuns()->pluck('status', 'id')->all())->toBe([$older => 'success', $newer => 'success']);
+    expect(scheduleRuns()->pluck('status')->all())->toBe($open === 1 ? ['success'] : ['running', 'running']);
+})->with(['one open' => 1, 'two open' => 2]);
+
+it('ignores runs left open longer than the interrupted threshold when closing without the Context', function () {
+    $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
+
+    startInBackground($task);
+    $this->travel(2)->days();
+    startInBackground($task);
+
+    finishInBackground($task, 0);
+
+    expect(scheduleRuns()->pluck('status')->all())->toBe(['running', 'success']);
+});
+
+it('looks up the background run on the write connection', function () {
+    $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
+    $context = startInBackground($task);
+
+    // A replica that has not received the start of the run yet.
+    $replica = new PDO('sqlite::memory:');
+    $replica->exec('create table '.ScheduleModule::RUNS.' (id, task, host, status, started_at, output_offset)');
+    Spyglass::connection()->setReadPdo($replica);
+
+    try {
+        finishInBackground($task, 0, $context);
+    } finally {
+        Spyglass::connection()->setReadPdo(null);
+    }
+
+    expect(scheduleRuns()->pluck('status')->all())->toBe(['success']);
 });
 
 it('closes a background run without the Context only on the host that started it', function () {
@@ -459,6 +552,24 @@ it('stores only the output appended by the run', function () {
     $this->artisan('schedule:run');
 
     expect(scheduleRuns()->first()->output)->toBe('done.');
+});
+
+it('records the run without output when the output size cannot be read', function () {
+    $file = outputFile('previous runs');
+    $task = app(Schedule::class)->exec('true')->everyMinute()->appendOutputTo($file);
+
+    // Makes the size lookup throw, as a rotation between the existence check and the size read does.
+    $task->output = "{$file}\0";
+    event(new ScheduledTaskStarting($task));
+    $task->output = $file;
+
+    file_put_contents($file, 'done.', FILE_APPEND);
+    $task->exitCode = 0;
+    event(new ScheduledTaskFinished($task, 0.0));
+
+    expect(scheduleRuns()->map(fn ($run) => [$run->status, $run->output])->all())->toBe([['success', null]])
+        ->and($this->spyglassErrors[0]->message)->toStartWith('Spyglass failed to read the output size of a scheduled task');
+    $this->spyglassErrors = [];
 });
 
 it('stores the output appended by a background run', function () {
