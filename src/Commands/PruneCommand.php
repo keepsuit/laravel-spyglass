@@ -22,7 +22,7 @@ class PruneCommand extends Command
                 }
 
                 $query = $spyglass->connection()->table($table)
-                    ->where($column, '<', now()->subDays((int) $days))
+                    ->where($column, '<', now('UTC')->subDays((int) $days))
                     ->limit(1000);
 
                 // Short batches keep locks and the transaction log small on large tables.

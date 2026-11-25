@@ -45,3 +45,18 @@ it('schedules the prune command daily', function () {
 it('can disable the prune schedule', function () {
     expect(pruneEvents($this->bootApplication(['spyglass.prune.schedule' => false])))->toBeEmpty();
 });
+
+it('compares retention in UTC, whatever the application timezone', function () {
+    $timezone = date_default_timezone_get();
+    date_default_timezone_set('Pacific/Kiritimati');
+
+    try {
+        DB::table('spyglass_test_entries')->insert(['name' => 'recent', 'created_at' => now('UTC')->subDays(6)->subHours(20)->format('Y-m-d H:i:s')]);
+
+        $this->artisan('spyglass:prune')->assertSuccessful();
+    } finally {
+        date_default_timezone_set($timezone);
+    }
+
+    expect(DB::table('spyglass_test_entries')->pluck('name')->sort()->values()->all())->toBe(['new', 'recent']);
+});

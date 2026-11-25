@@ -13,7 +13,7 @@ abstract class Module
     public function boot(): void {}
 
     /**
-     * Tables pruned by `spyglass:prune`: rows whose datetime column is older than
+     * Tables pruned by `spyglass:prune`: rows whose datetime column (stored in UTC) is older than
      * `spyglass.modules.{module}.retention.{key}` days are deleted.
      *
      * @return array<string, array{column: string, retention: string}>
