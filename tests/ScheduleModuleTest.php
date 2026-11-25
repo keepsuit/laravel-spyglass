@@ -88,6 +88,10 @@ it('records a throwing closure as a failed run', function () {
 });
 
 it('records a run skipped because it overlaps as skipped, not as a success', function (bool $background) {
+    if ($background && ! property_exists(Event::class, 'skippedBecauseOverlapping')) {
+        $this->markTestSkipped('Without the overlap flag a skipped background run is indistinguishable from a started one.');
+    }
+
     // Another process takes the mutex between the filter check and the run.
     $task = app(Schedule::class)->exec('true')->everyMinute();
     $task->runInBackground = $background;
