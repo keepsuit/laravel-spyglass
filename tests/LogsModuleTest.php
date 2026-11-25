@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Database\QueryException;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
@@ -251,4 +252,28 @@ it('prunes entries older than the retention', function () {
     $this->artisan('spyglass:prune')->assertSuccessful();
 
     expect(array_column(logEntries(), 'message'))->toBe(['New']);
+});
+
+it('restarts the entry cap every minute in processes without lifecycles', function () {
+    $this->travelTo(now()->startOfMinute());
+
+    foreach (range(1, 101) as $i) {
+        Log::error("Message {$i}");
+    }
+
+    $this->travel(1)->minute();
+    Log::error('Next minute');
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(101);
+});
+
+it('stores query errors without the bindings when the exceptions module is off', function () {
+    $exception = new QueryException('testing', 'select * from users where email = ?', ['secret@example.com'], new PDOException('boom'));
+
+    Log::error($exception->getMessage(), ['exception' => $exception]);
+    SpyglassFacade::flush();
+
+    expect(logEntries()[0]['message'])->not->toContain('secret@example.com')
+        ->and(logEntries()[0]['log_context'])->not->toContain('secret@example.com');
 });

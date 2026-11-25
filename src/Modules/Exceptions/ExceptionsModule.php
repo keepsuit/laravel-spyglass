@@ -177,12 +177,17 @@ class ExceptionsModule extends Module
         }
     }
 
+    protected function message(Throwable $e): string
+    {
+        return $this->truncate(self::safeMessage($e));
+    }
+
     /**
      * The driver message and the bindings of a query error can hold personal data: only the SQL is kept.
      */
-    protected function message(Throwable $e): string
+    public static function safeMessage(Throwable $e): string
     {
-        return $this->truncate($e instanceof QueryException ? "SQLSTATE[{$e->getCode()}]: {$e->getSql()}" : $e->getMessage());
+        return $e instanceof QueryException ? "SQLSTATE[{$e->getCode()}]: {$e->getSql()}" : $e->getMessage();
     }
 
     protected function userId(): ?string

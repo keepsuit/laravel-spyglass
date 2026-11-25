@@ -18,10 +18,13 @@ class LogHandler extends AbstractHandler
 {
     protected const int MAX_BYTES = 4096;
 
-    /** Entries stored per request, job or scheduled task, so distinct messages cannot flood the table either. */
+    /** Entries stored per request, job, scheduled task or minute, so distinct messages cannot flood the table either. */
     protected const int MAX_ENTRIES = 100;
 
     protected int $stored = 0;
+
+    /** Restarts the cap in processes that never start a new lifecycle. */
+    protected int $minute = 0;
 
     protected Throttle $throttle;
 
@@ -39,6 +42,11 @@ class LogHandler extends AbstractHandler
 
     public function handle(LogRecord $record): bool
     {
+        if (($minute = intdiv(Date::now()->getTimestamp(), 60)) !== $this->minute) {
+            $this->minute = $minute;
+            $this->stored = 0;
+        }
+
         // Spyglass logs its own failures while ignoring: they reach the other channels only.
         if (! $this->isHandling($record) || Spyglass::isIgnoring() || $this->stored >= self::MAX_ENTRIES) {
             return false;
@@ -60,9 +68,14 @@ class LogHandler extends AbstractHandler
                     return null;
                 }
 
+                $exception = $record->context['exception'] ?? null;
+
                 return [
                     'level' => $record->level->toPsrLogLevel(),
-                    'message' => $this->truncate($record->message),
+                    // Laravel logs a reported exception with its own message: a query error's would carry the bindings.
+                    'message' => $this->truncate($exception instanceof Throwable && $record->message === $exception->getMessage()
+                        ? ExceptionsModule::safeMessage($exception)
+                        : $record->message),
                     'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
                     'logged_at' => Date::now('UTC')->toDateTimeString(),
                     ...$context,
@@ -88,7 +101,7 @@ class LogHandler extends AbstractHandler
     protected function encode(array $context): string
     {
         $context = array_map(fn (mixed $value) => $value instanceof Throwable
-            ? $value::class.': '.$value->getMessage().' at '.$value->getFile().':'.$value->getLine()
+            ? $value::class.': '.ExceptionsModule::safeMessage($value).' at '.$value->getFile().':'.$value->getLine()
             : $value, $context);
 
         return (string) json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
