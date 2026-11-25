@@ -19,42 +19,47 @@ class QueueQueries
 {
     public const int MAX_SERIES_ROWS = 5000;
 
-    public const int MAX_QUEUES = 100;
+    public const int MAX_QUEUES = 20;
 
     protected const array COUNTERS = ['queued', 'processed', 'failed', 'released', 'timed_out', 'duration_sum', 'duration_max'];
 
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Counters per 5-minute bucket, oldest first. Beyond the row limit the oldest buckets are left out.
+     * Counters per 5-minute bucket, oldest first, with buckets in UTC. Beyond the row limit the oldest buckets are left out.
      *
      * @param  list<'queue'|'job'>  $groupBy
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
+     * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
      * @return Collection<int, array<string, mixed>>
      */
     public function series(CarbonInterface $from, CarbonInterface $to, array $groupBy = [], array $filters = []): Collection
     {
-        return $this->aggregates($from, $to, ['bucket', ...$this->groupColumns($groupBy)], $filters)
+        $rows = $this->aggregates($from, $to, ['bucket', ...$this->groupColumns($groupBy)], $filters)
             ->orderByDesc('bucket')
             ->limit(self::MAX_SERIES_ROWS)
-            ->get()
-            ->reverse()
-            ->values()
-            ->map($this->castCounters(...));
+            ->get();
+
+        // The limit may cut the oldest bucket it reaches, which would show partial counters.
+        if ($rows->count() === self::MAX_SERIES_ROWS) {
+            $oldest = $rows->last()?->bucket;
+            $rows = $rows->reject(fn (object $row) => $row->bucket === $oldest);
+        }
+
+        return $rows->reverse()->values()->map($this->castCounters(...));
     }
 
     /**
      * Counters over the whole range, busiest first.
      *
      * @param  list<'queue'|'job'>  $groupBy
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
+     * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
      * @return Collection<int, array<string, mixed>>
      */
     public function totals(CarbonInterface $from, CarbonInterface $to, array $groupBy = ['queue'], array $filters = [], int $limit = 100): Collection
     {
         return $this->aggregates($from, $to, $this->groupColumns($groupBy), $filters)
             ->orderByRaw('sum(processed) + sum(failed) + sum(released) + sum(timed_out) desc')
-            ->limit(min($limit, 1000))
+            ->limit($this->clamp($limit, 1000))
             ->get()
             ->map($this->castCounters(...));
     }
@@ -62,7 +67,7 @@ class QueueQueries
     /**
      * Failed jobs index, newest first. The payload and the stack trace stay in the failer: see `failedJob()`.
      *
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
+     * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
      * @return LengthAwarePaginator<int, object>
      */
     public function failedJobs(array $filters = [], int $perPage = 25, int $page = 1): LengthAwarePaginator
@@ -71,7 +76,7 @@ class QueueQueries
             ->where($this->filters($filters))
             ->orderByDesc('failed_at')
             ->orderByDesc('id')
-            ->paginate(max(1, min($perPage, 100)), page: $page);
+            ->paginate($this->clamp($perPage, 100), page: $page);
     }
 
     /**
@@ -95,14 +100,20 @@ class QueueQueries
      */
     public function sizes(CarbonInterface $since): Collection
     {
-        return $this->spyglass->connection()->table(QueueModule::AGGREGATES)
-            ->where('bucket', '>=', $since->toDateTimeString())
-            ->distinct()
-            ->orderBy('connection')
-            ->orderBy('queue')
-            ->limit(self::MAX_QUEUES)
-            ->get(['connection', 'queue'])
-            ->map(fn (object $row) => $this->queueSizes($row->connection, $row->queue));
+        // Each size is a call to the queue backend, repeated by every dashboard refresh.
+        return collect($this->spyglass->cache()->remember(
+            'spyglass:queue:sizes:'.intdiv($since->getTimestamp(), 300),
+            5,
+            fn () => $this->spyglass->connection()->table(QueueModule::AGGREGATES)
+                ->where('bucket', '>=', $this->utc($since))
+                ->distinct()
+                ->orderBy('connection')
+                ->orderBy('queue')
+                ->limit(self::MAX_QUEUES)
+                ->get(['connection', 'queue'])
+                ->map(fn (object $row) => $this->queueSizes($row->connection, $row->queue))
+                ->all(),
+        ));
     }
 
     /**
@@ -131,39 +142,52 @@ class QueueQueries
 
     protected function runOnFailedJob(string $command, string $uuid): Outcome
     {
+        $failer = app(FailedJobProviderInterface::class);
+        $record = $failer->find($uuid);
+
         // `queue:retry` exits with 0 for an unknown id.
-        if (app(FailedJobProviderInterface::class)->find($uuid) === null) {
+        if ($record === null) {
             $this->forgetIndexRow($uuid);
 
             return Outcome::Missing;
         }
 
+        $startedAt = now();
+
         try {
-            $exitCode = Artisan::call($command, ['id' => [$uuid]]);
+            // A single id: `queue:forget` takes one on Laravel 12 and casts it to a list on 13.
+            $exitCode = Artisan::call($command, ['id' => $uuid]);
         } catch (Throwable $e) {
             report($e);
 
             return Outcome::Failed;
         }
 
-        if ($exitCode !== 0) {
+        $gone = $failer->find($uuid) === null;
+
+        if ($exitCode !== 0 || ($command === 'queue:forget' && ! $gone)) {
             return Outcome::Failed;
         }
 
-        // Both commands remove the job from the failer. A retried job that fails again gets a new row.
-        $this->forgetIndexRow($uuid);
+        // A retried job may already have failed again, with the same uuid: its row stays.
+        if ($gone) {
+            $this->forgetIndexRow($uuid, $startedAt);
+        }
 
         return Outcome::Done;
     }
 
-    protected function forgetIndexRow(string $uuid): void
+    protected function forgetIndexRow(string $uuid, ?CarbonInterface $failedBefore = null): void
     {
-        $this->spyglass->connection()->table(QueueModule::FAILED_JOBS)->where('uuid', $uuid)->delete();
+        $this->spyglass->connection()->table(QueueModule::FAILED_JOBS)
+            ->where('uuid', $uuid)
+            ->when($failedBefore, fn (Builder $query, CarbonInterface $before) => $query->where('failed_at', '<=', $before->toDateTimeString()))
+            ->delete();
     }
 
     /**
      * @param  list<string>  $groups
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
+     * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
      */
     protected function aggregates(CarbonInterface $from, CarbonInterface $to, array $groups, array $filters): Builder
     {
@@ -171,7 +195,7 @@ class QueueQueries
             ->select($groups)
             ->selectRaw('sum(queued) as queued, sum(processed) as processed, sum(failed) as failed, sum(released) as released, '
                 .'sum(timed_out) as timed_out, sum(duration_sum) as duration_sum, max(duration_max) as duration_max')
-            ->whereBetween('bucket', [$from->toDateTimeString(), $to->toDateTimeString()])
+            ->whereBetween('bucket', [$this->utc($from), $this->utc($to)])
             ->where($this->filters($filters))
             ->groupBy($groups);
     }
@@ -194,12 +218,12 @@ class QueueQueries
     }
 
     /**
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
+     * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
      * @return array<string, string>
      */
     protected function filters(array $filters): array
     {
-        return array_intersect_key($filters, array_flip(['queue', 'job', 'scope']));
+        return array_intersect_key($filters, array_flip(['connection', 'queue', 'job', 'scope']));
     }
 
     /**
@@ -216,6 +240,21 @@ class QueueQueries
         }
 
         return $row;
+    }
+
+    /**
+     * Laravel ignores a negative limit, which would drop the `LIMIT` clause.
+     *
+     * @return positive-int
+     */
+    protected function clamp(int $limit, int $max): int
+    {
+        return max(1, min($limit, $max));
+    }
+
+    protected function utc(CarbonInterface $time): string
+    {
+        return $time->copy()->utc()->toDateTimeString();
     }
 
     /**
