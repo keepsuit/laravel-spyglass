@@ -4,7 +4,6 @@ namespace Keepsuit\Spyglass\Modules\Exceptions;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
-use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobProcessing;
@@ -56,11 +55,12 @@ class ExceptionsModule extends Module
 
     public function boot(): void
     {
-        /** @var ExceptionHandler $handler Larastan infers the handler bound where it runs. */
+        /** @var ExceptionHandler $handler Larastan would infer the handler bound in its own process. */
         $handler = app(ExceptionHandler::class);
 
         // A callback, not an event, so `dontReport` and `shouldReport` apply. It returns nothing, so reporting goes on.
-        if ($handler instanceof Handler) {
+        // Not `instanceof Handler`: decorators such as Collision's console handler forward it.
+        if (method_exists($handler, 'reportable')) {
             $handler->reportable(function (Throwable $e): void {
                 $this->record($e);
             });

@@ -2,6 +2,7 @@
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Artisan;
@@ -17,6 +18,7 @@ use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Tests\Fixtures\TestJob;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsModule;
+use NunoMaduro\Collision\Adapters\Laravel\ExceptionHandler as CollisionHandler;
 
 uses(WithExceptionsModule::class);
 
@@ -95,6 +97,16 @@ it('respects dontReport', function () {
 
     expect(DB::table(ExceptionsModule::GROUPS)->count())->toBe(0)
         ->and(DB::table(ExceptionsModule::OCCURRENCES)->count())->toBe(0);
+});
+
+it('registers through handler decorators', function () {
+    // Collision wraps the application handler in console processes outside tests.
+    app()->instance(ExceptionHandler::class, new CollisionHandler(app(), new Handler(app())));
+    (new ExceptionsModule)->boot();
+
+    reportAndFlush(sameSiteException());
+
+    expect(exceptionGroup()['count'])->toBe(1);
 });
 
 it('counts the same exception instance once', function () {
