@@ -26,7 +26,7 @@ class QueueQueries
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Counters per 5-minute bucket, oldest first.
+     * Counters per 5-minute bucket, oldest first. Beyond the row limit the oldest buckets are left out.
      *
      * @param  list<'queue'|'job'>  $groupBy
      * @param  array{queue?: string, job?: string, scope?: string}  $filters
@@ -35,9 +35,11 @@ class QueueQueries
     public function series(CarbonInterface $from, CarbonInterface $to, array $groupBy = [], array $filters = []): Collection
     {
         return $this->aggregates($from, $to, ['bucket', ...$this->groupColumns($groupBy)], $filters)
-            ->orderBy('bucket')
+            ->orderByDesc('bucket')
             ->limit(self::MAX_SERIES_ROWS)
             ->get()
+            ->reverse()
+            ->values()
             ->map($this->castCounters(...));
     }
 

@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Queue\Events\WorkerStopping;
+use Illuminate\Queue\Events\JobTimedOut;
 use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
@@ -15,7 +15,7 @@ use Keepsuit\Spyglass\Tests\Fixtures\WithQueueModule;
 
 uses(WithQueueModule::class);
 
-function work(int $tries = 1): void
+function queueWork(int $tries = 1): void
 {
     Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => $tries, '--sleep' => 0]);
 }
@@ -23,7 +23,7 @@ function work(int $tries = 1): void
 /**
  * @return array<string, int>
  */
-function counters(): array
+function queueCounters(): array
 {
     $row = DB::table(QueueModule::AGGREGATES)
         ->selectRaw('sum(queued) as queued, sum(processed) as processed, sum(failed) as failed, sum(released) as released, sum(timed_out) as timed_out')
@@ -32,7 +32,7 @@ function counters(): array
     return array_map(intval(...), (array) $row);
 }
 
-function failedRows(): array
+function queueFailedRows(): array
 {
     return DB::table(QueueModule::FAILED_JOBS)->get()->map(fn ($row) => (array) $row)->all();
 }
@@ -42,10 +42,10 @@ it('counts each attempt once', function (string $action, int $tries, int $runs, 
     SpyglassFacade::flush();
 
     for ($i = 0; $i < $runs; $i++) {
-        work($tries);
+        queueWork($tries);
     }
 
-    expect(counters())->toBe(['queued' => 1, ...$expected]);
+    expect(queueCounters())->toBe(['queued' => 1, ...$expected]);
 })->with([
     'success' => ['succeed', 1, 1, ['processed' => 1, 'failed' => 0, 'released' => 0, 'timed_out' => 0]],
     'exception on the last try' => ['throw', 1, 1, ['processed' => 0, 'failed' => 1, 'released' => 0, 'timed_out' => 0]],
@@ -60,9 +60,9 @@ it('counts a job that already exceeded its tries as failed', function () {
     // As left behind by a worker killed on timeout.
     DB::table('jobs')->update(['attempts' => 1]);
 
-    work(1);
+    queueWork(1);
 
-    expect(counters())->toBe(['queued' => 1, 'processed' => 0, 'failed' => 1, 'released' => 0, 'timed_out' => 0]);
+    expect(queueCounters())->toBe(['queued' => 1, 'processed' => 0, 'failed' => 1, 'released' => 0, 'timed_out' => 0]);
 });
 
 it('stores a timed out attempt before the worker exits', function (int $tries, array $expected, int $failedRows) {
@@ -71,21 +71,19 @@ it('stores a timed out attempt before the worker exits', function (int $tries, a
 
     $stored = null;
 
-    // The worker exits right after stopping. This listener runs after the flush and escapes before the exit.
-    Event::listen(WorkerStopping::class, function () use (&$stored) {
-        if ($stored === null) {
-            $stored = [counters(), count(failedRows())];
-            app('queue.worker')->shouldQuit = true;
+    // The worker exits right after this event. Listening after the module and throwing keeps the test process alive.
+    Event::listen(JobTimedOut::class, function () use (&$stored) {
+        $stored = [queueCounters(), count(queueFailedRows())];
+        app('queue.worker')->shouldQuit = true;
 
-            throw new RuntimeException('Killed');
-        }
+        throw new RuntimeException('Killed');
     });
 
     app('queue.worker')->daemon('database', 'default', new WorkerOptions(sleep: 0, maxTries: $tries, timeout: 1, stopWhenEmpty: true));
 
     expect($stored)->toBe([['queued' => 1, ...$expected], $failedRows])
         // Not counted again when the attempt unwinds.
-        ->and(counters())->toBe($stored[0]);
+        ->and(queueCounters())->toBe($stored[0]);
 })->with([
     'retried later' => [2, ['processed' => 0, 'failed' => 0, 'released' => 0, 'timed_out' => 1], 0],
     'last try' => [1, ['processed' => 0, 'failed' => 1, 'released' => 0, 'timed_out' => 0], 1],
@@ -101,18 +99,18 @@ it('counts queued jobs once per dispatch, on the queue they run on', function ()
 
     $this->get('/dispatch')->assertOk();
 
-    expect(counters())->toMatchArray(['queued' => 2, 'processed' => 0]);
+    expect(queueCounters())->toMatchArray(['queued' => 2, 'processed' => 0]);
 
-    work();
+    queueWork();
 
-    expect(counters())->toMatchArray(['queued' => 2, 'processed' => 1])
+    expect(queueCounters())->toMatchArray(['queued' => 2, 'processed' => 1])
         ->and(DB::table(QueueModule::AGGREGATES)->get(['connection', 'queue', 'job'])->map(fn ($row) => (array) $row)->all())
         ->toBe([['connection' => 'database', 'queue' => 'default', 'job' => QueueJob::class]]);
 });
 
 it('measures the duration of each attempt', function () {
     QueueJob::dispatch();
-    work();
+    queueWork();
 
     $row = DB::table(QueueModule::AGGREGATES)->first();
 
@@ -126,17 +124,17 @@ it('ignores sync jobs', function () {
     SpyglassFacade::flush();
 
     expect(DB::table(QueueModule::AGGREGATES)->count())->toBe(0)
-        ->and(failedRows())->toBeEmpty();
+        ->and(queueFailedRows())->toBeEmpty();
 });
 
 it('indexes a failed job', function () {
     QueueJob::dispatch('throw');
-    work();
+    queueWork();
 
     $uuid = app('queue.failer')->ids()[0];
 
-    expect(failedRows())->toHaveCount(1)
-        ->and(failedRows()[0])->toMatchArray([
+    expect(queueFailedRows())->toHaveCount(1)
+        ->and(queueFailedRows()[0])->toMatchArray([
             'uuid' => $uuid,
             'connection' => 'database',
             'queue' => 'default',
@@ -147,21 +145,32 @@ it('indexes a failed job', function () {
             'scope' => null,
             'context' => null,
         ])
-        ->and(failedRows()[0]['fingerprint'])->toHaveLength(40);
+        ->and(queueFailedRows()[0]['fingerprint'])->toHaveLength(40);
 });
+
+it('indexes failed jobs only for failers keyed by uuid', function (string $driver) {
+    config()->set('queue.failed.driver', $driver);
+    app()->forgetInstance('queue.failer');
+
+    QueueJob::dispatch('throw');
+    queueWork();
+
+    expect(queueCounters())->toMatchArray(['failed' => 1])
+        ->and(queueFailedRows())->toBeEmpty();
+})->with(['null', 'database']);
 
 it('updates the index row when a retried job fails again', function () {
     QueueJob::dispatch('throw');
-    work();
+    queueWork();
     $uuid = app('queue.failer')->ids()[0];
 
     $this->travel(1)->hours();
     Artisan::call('queue:retry', ['id' => [$uuid]]);
-    work();
+    queueWork();
 
-    expect(failedRows())->toHaveCount(1)
-        ->and(failedRows()[0]['uuid'])->toBe($uuid)
-        ->and(failedRows()[0]['failed_at'])->toBe(now()->toDateTimeString());
+    expect(queueFailedRows())->toHaveCount(1)
+        ->and(queueFailedRows()[0]['uuid'])->toBe($uuid)
+        ->and(queueFailedRows()[0]['failed_at'])->toBe(now()->toDateTimeString());
 });
 
 it('keeps the scope captured when the job started after the context is cleared', function () {
@@ -172,10 +181,10 @@ it('keeps the scope captured when the job started after the context is cleared',
     QueueJob::dispatch('forget-context');
     Context::flush();
 
-    work();
+    queueWork();
 
-    expect(failedRows()[0]['scope'])->toBe('tenant:acme')
-        ->and(json_decode(failedRows()[0]['context'], true))->toBe(['tenant' => 'acme']);
+    expect(queueFailedRows()[0]['scope'])->toBe('tenant:acme')
+        ->and(json_decode(queueFailedRows()[0]['context'], true))->toBe(['tenant' => 'acme']);
 });
 
 it('splits aggregates by scope when enabled', function () {
@@ -190,8 +199,8 @@ it('splits aggregates by scope when enabled', function () {
     Context::forget('tenant');
     QueueJob::dispatch();
     SpyglassFacade::flush();
-    work();
-    work();
+    queueWork();
+    queueWork();
 
     expect(DB::table(QueueModule::AGGREGATES)->orderBy('scope')->get(['scope', 'queued', 'processed'])->map(fn ($row) => (array) $row)->all())
         ->toBe([
@@ -213,20 +222,20 @@ it('increments the same bucket from concurrent workers', function () {
         app()->instance(Spyglass::class, $workers[$i]);
         SpyglassFacade::clearResolvedInstance(Spyglass::class);
 
-        work();
+        queueWork();
     }
 
     $workers[2]->flush();
     $workers[1]->flush();
 
-    expect(counters())->toBe(['queued' => 2, 'processed' => 2, 'failed' => 0, 'released' => 0, 'timed_out' => 0]);
+    expect(queueCounters())->toBe(['queued' => 2, 'processed' => 2, 'failed' => 0, 'released' => 0, 'timed_out' => 0]);
 });
 
 it('prunes old rows and failed jobs no longer in the failer', function () {
     QueueJob::dispatch('throw');
     QueueJob::dispatch('throw');
-    work();
-    work();
+    queueWork();
+    queueWork();
     [$kept, $retried] = app('queue.failer')->ids();
     app('queue.failer')->forget($retried);
 

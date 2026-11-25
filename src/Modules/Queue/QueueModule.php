@@ -8,6 +8,7 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobQueued;
 use Illuminate\Queue\Events\JobTimedOut;
+use Illuminate\Queue\Failed\DatabaseFailedJobProvider;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
 use Illuminate\Queue\Failed\NullFailedJobProvider;
 use Illuminate\Queue\Jobs\JobName;
@@ -74,12 +75,13 @@ class QueueModule extends Module
             },
         ));
 
-        // On timeout the worker exits right after this event (stopping the worker flushes first), so
-        // `JobAttempted` never fires. A timeout on the last try has already failed the job.
-        Event::listen(JobTimedOut::class, fn (JobTimedOut $event) => $this->countAttempt(
-            $event->job,
-            $event->job->hasFailed() ? 'failed' : 'timed_out',
-        ));
+        // On timeout the worker exits right after this event, so `JobAttempted` never fires and the
+        // attempt, and the failed row of a last try, are stored now.
+        Event::listen(JobTimedOut::class, function (JobTimedOut $event) {
+            $this->countAttempt($event->job, $event->job->hasFailed() ? 'failed' : 'timed_out');
+
+            Spyglass::flush();
+        });
     }
 
     public function prunable(): array
@@ -115,8 +117,9 @@ class QueueModule extends Module
         $job = $event->job;
         $uuid = $job->uuid();
 
-        // The index mirrors the failer: without one there is nothing to retry or delete.
-        if ($job instanceof SyncJob || $uuid === null || $failer instanceof NullFailedJobProvider) {
+        // The index mirrors the failer by uuid. The null failer stores nothing, the legacy database one
+        // is keyed by an auto-increment id.
+        if ($job instanceof SyncJob || $uuid === null || $failer instanceof NullFailedJobProvider || $failer instanceof DatabaseFailedJobProvider) {
             return;
         }
 
