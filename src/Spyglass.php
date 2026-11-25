@@ -200,12 +200,15 @@ class Spyglass
             $pending['increment'][$column] = ($pending['increment'][$column] ?? 0) + $amount;
         }
 
+        // A NULL never replaces a value: PHP's min() would pick it.
         foreach ($max as $column => $value) {
-            $pending['max'][$column] = isset($pending['max'][$column]) ? max($pending['max'][$column], $value) : $value;
+            $current = $pending['max'][$column] ?? null;
+            $pending['max'][$column] = $current === null || $value === null ? $value ?? $current : max($current, $value);
         }
 
         foreach ($min as $column => $value) {
-            $pending['min'][$column] = isset($pending['min'][$column]) ? min($pending['min'][$column], $value) : $value;
+            $current = $pending['min'][$column] ?? null;
+            $pending['min'][$column] = $current === null || $value === null ? $value ?? $current : min($current, $value);
         }
     }
 
@@ -432,12 +435,15 @@ class Spyglass
             default => throw new RuntimeException("Spyglass does not support the [{$db->getDriverName()}] database driver."),
         };
 
-        // The existing value is NULL when the row was created by an upsert that did not set this column.
+        // Either side can be NULL: the existing value when the row was created by an upsert that did not set this
+        // column, the incoming one when the caller had none. MySQL and SQLite return NULL if any argument is NULL.
+        $either = "coalesce({$existing}, {$incoming}), coalesce({$incoming}, {$existing})";
+
         // @phpstan-ignore argument.type (built from wrapped column names declared by modules, never from input)
         return new Expression(match ($operation) {
             'increment' => "coalesce({$existing}, 0) + {$incoming}",
-            'max' => ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."(coalesce({$existing}, {$incoming}), {$incoming})",
-            'min' => ($db->getDriverName() === 'sqlite' ? 'min' : 'least')."(coalesce({$existing}, {$incoming}), {$incoming})",
+            'max' => ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."({$either})",
+            'min' => ($db->getDriverName() === 'sqlite' ? 'min' : 'least')."({$either})",
         });
     }
 }

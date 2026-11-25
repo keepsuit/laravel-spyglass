@@ -255,6 +255,21 @@ it('keeps the smallest value of min columns, in memory and in storage', function
     expect(DB::table('spyglass_test_counters')->value('low'))->toBe(2);
 });
 
+it('never replaces a min or max value with NULL, in memory and in storage', function () {
+    $key = ['bucket' => 'b1', 'name' => 'a'];
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => 5], min: ['low' => 7]);
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => 5]);
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => null]);
+    Spyglass::flush();
+
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['peak' => 5, 'low' => 5]);
+
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => null]);
+    Spyglass::flush();
+
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['peak' => 5, 'low' => 5]);
+});
+
 it('keeps an open application transaction usable when storage fails', function () {
     DB::transaction(function () {
         DB::table('spyglass_test_entries')->insert(['name' => 'before']);
