@@ -7,6 +7,10 @@ use Keepsuit\Spyglass\Facades\Spyglass;
 
 $sharesApplicationConnection = fn () => DB::getDriverName() === 'sqlite';
 
+it('flushes outside any transaction, as in production', function () {
+    expect(Spyglass::connection()->transactionLevel())->toBe(0);
+});
+
 it('keeps entries when the application transaction rolls back', function () {
     try {
         DB::transaction(function () {
