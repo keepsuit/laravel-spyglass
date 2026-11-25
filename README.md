@@ -1,19 +1,34 @@
-# Lightweight production-safe monitoring dashboard for Laravel
+# Spyglass: lightweight monitoring dashboard for Laravel
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/keepsuit/laravel-spyglass.svg?style=flat-square)](https://packagist.org/packages/keepsuit/laravel-spyglass)
-[![GitHub Tests Action Status](https://github.com/spatie/package-laravel-spyglass-laravel/actions/workflows/run-tests.yml/badge.svg)](https://github.com/keepsuit/laravel-spyglass/actions?query=workflow%3Arun-tests+branch%3Amain)
-[![GitHub Code Style Action Status](https://github.com/spatie/package-laravel-spyglass-laravel/actions/workflows/fix-php-code-style-issues.yml/badge.svg)](https://github.com/keepsuit/laravel-spyglass/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
-[![Total Downloads](https://img.shields.io/packagist/dt/keepsuit/laravel-spyglass.svg?style=flat-square)](https://packagist.org/packages/keepsuit/laravel-spyglass)
+[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/keepsuit/laravel-spyglass/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/keepsuit/laravel-spyglass/actions?query=workflow%3Arun-tests+branch%3Amain)
+[![GitHub Code Style Action Status](https://img.shields.io/github/actions/workflow/status/keepsuit/laravel-spyglass/fix-php-code-style-issues.yml?branch=main&label=code%20style&style=flat-square)](https://github.com/keepsuit/laravel-spyglass/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
 
-This is where your description should go. Limit it to a paragraph or two. Consider adding a small example.
+Spyglass is a single, lightweight dashboard that gives an overview of a Laravel application in production: scheduled tasks, queues, exceptions and logs. It is meant to replace Telescope, Horizon's dashboard and Pulse with something that is safe to keep enabled in production.
 
-## Support us
+> [!WARNING]
+> Spyglass is under active development and is not ready for use yet.
 
-[<img src="https://spatie.be/github-ad-image/laravel-spyglass.jpg" width="419px" />](https://spatie.be/github-ad-click/laravel-spyglass)
+## Goals
 
-We invest a lot of resources into creating [best in class open source packages](https://spatie.be/open-source). You can support us by [buying one of our paid products](https://spatie.be/open-source/support-us).
+- **Low overhead**: entries are buffered in memory and written in a single batch at the end of each request, job or command. Nothing is pushed to the queue, and storage failures never break the application.
+- **Driver agnostic**: data is collected from Laravel events, so queue metrics are the same whether workers run with `queue:work` or Horizon. No Redis requirement.
+- **Multi-tenant aware**: a configurable set of [Context](https://laravel.com/docs/context) keys is stored with every entry, and a resolver turns them into a filterable scope (for example the current tenant).
+- **Everything optional**: every module can be enabled or disabled from the config file.
 
-We highly appreciate you sending us a postcard from your hometown, mentioning which of our package(s) you are using. You'll find our address on [our contact page](https://spatie.be/about-us). We publish all received postcards on [our virtual postcard wall](https://spatie.be/open-source/postcards).
+## Planned features
+
+- **Schedule**: task list, last run, duration and outcome, next run, missed runs.
+- **Queues**: processed, failed, released and timed out counters per queue and job class, pending/running/delayed sizes, failed jobs with retry and delete.
+- **Exceptions**: grouped by fingerprint, with occurrences, first and last seen, resolve and reopen on regression.
+- **Logs**: a `spyglass` log channel that stores `warning` and above.
+- **Health**: database and cache connectivity, queue sizes, debug mode, runtime versions, deployed commit.
+
+Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an API for custom modules.
+
+## Requirements
+
+- PHP 8.3+
+- Laravel 12.19+ or 13
 
 ## Installation
 
@@ -23,37 +38,10 @@ You can install the package via composer:
 composer require keepsuit/laravel-spyglass
 ```
 
-You can publish and run the migrations with:
-
-```bash
-php artisan vendor:publish --tag="laravel-spyglass-migrations"
-php artisan migrate
-```
-
 You can publish the config file with:
 
 ```bash
 php artisan vendor:publish --tag="laravel-spyglass-config"
-```
-
-This is the contents of the published config file:
-
-```php
-return [
-];
-```
-
-Optionally, you can publish the views using
-
-```bash
-php artisan vendor:publish --tag="laravel-spyglass-views"
-```
-
-## Usage
-
-```php
-$spyglass = new Keepsuit\Spyglass();
-echo $spyglass->echoPhrase('Hello, Keepsuit!');
 ```
 
 ## Testing
@@ -65,14 +53,6 @@ composer test
 ## Changelog
 
 Please see [CHANGELOG](CHANGELOG.md) for more information on what has changed recently.
-
-## Contributing
-
-Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
-
-## Security Vulnerabilities
-
-Please review [our security policy](../../security/policy) on how to report security vulnerabilities.
 
 ## Credits
 
