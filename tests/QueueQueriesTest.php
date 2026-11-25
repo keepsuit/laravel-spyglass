@@ -93,6 +93,18 @@ it('keeps the newest whole buckets when the series exceeds its row limit', funct
         ->and($series->last()['bucket'])->toBe($start->copy()->addMinutes(5 * ($buckets - 1))->toDateTimeString());
 });
 
+it('keeps every bucket when the series fills its row limit exactly', function () {
+    $start = now()->parse('2026-01-01 00:00');
+
+    foreach (array_chunk(range(0, QueueQueries::MAX_SERIES_ROWS - 1), 100) as $chunk) {
+        DB::table(QueueModule::AGGREGATES)->insert(array_map(fn (int $i) => [
+            'bucket' => $start->copy()->addMinutes(5 * $i)->toDateTimeString(), 'connection' => 'database', 'queue' => 'default', 'job' => 'A',
+        ], $chunk));
+    }
+
+    expect(queueQueries()->series($start, $start->copy()->addYear()))->toHaveCount(QueueQueries::MAX_SERIES_ROWS);
+});
+
 it('stores buckets in UTC and reads them back from any timezone', function () {
     $timezone = date_default_timezone_get();
     // Local buckets would repeat when DST ends. Carbon's test clock cannot hold that hour, so any local time shows the shift.

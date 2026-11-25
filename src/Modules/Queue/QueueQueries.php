@@ -36,12 +36,12 @@ class QueueQueries
     {
         $rows = $this->aggregates($from, $to, ['bucket', ...$this->groupColumns($groupBy)], $filters)
             ->orderByDesc('bucket')
-            ->limit(self::MAX_SERIES_ROWS)
+            // One more row tells whether the limit cut the oldest bucket, which would show partial counters.
+            ->limit(self::MAX_SERIES_ROWS + 1)
             ->get();
 
-        // The limit may cut the oldest bucket it reaches, which would show partial counters.
-        if ($rows->count() === self::MAX_SERIES_ROWS) {
-            $oldest = $rows->last()?->bucket;
+        if ($rows->count() > self::MAX_SERIES_ROWS) {
+            $oldest = $rows->pop()?->bucket;
             $rows = $rows->reject(fn (object $row) => $row->bucket === $oldest);
         }
 
