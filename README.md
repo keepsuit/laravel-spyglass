@@ -28,7 +28,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 ## Requirements
 
 - PHP 8.3+
-- Laravel 12.19+ or 13
+- Laravel 12.25+ or 13
 - MySQL/MariaDB, PostgreSQL or SQLite (SQL Server is not supported)
 
 ## Installation
