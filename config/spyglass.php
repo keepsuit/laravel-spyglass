@@ -50,8 +50,11 @@ return [
             'retention' => [
                 'runs' => 30,
             ],
-            // Seconds after a due time before a task without a run is reported as missed.
+            // Seconds after a due time before a task without a run or a skip is reported as missed.
+            // Keep it above 60: skips of sub-minute tasks are written at most every 30 seconds.
             'missed_after' => 90,
+            // Seconds after which a run that never reported an outcome is shown as interrupted.
+            'interrupted_after' => 86400,
         ],
 
         'queue' => [

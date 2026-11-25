@@ -3,77 +3,108 @@
 namespace Keepsuit\Spyglass\Modules\Schedule;
 
 use Cron\CronExpression;
-use Illuminate\Console\Scheduling\Event as Task;
-use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
+use stdClass;
+use Throwable;
 
 /**
- * Read side of the schedule module. Every query is bounded.
+ * Read side of the schedule module: only the tables the scheduler writes, never the console kernel.
+ * Every query is bounded. Datetimes are UTC strings, as stored.
  */
 class ScheduleQueries
 {
     /** Tasks per last-run query: SQLite allows at most 500 terms in a compound select. */
     protected const int LAST_RUNS_CHUNK = 100;
 
+    protected const int MAX_TASKS = 1000;
+
+    /** A task the scheduler stopped publishing this long before the newest publish was removed from the schedule. */
+    protected const int STALE_AFTER = 300;
+
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Tasks of the console schedule with their next run, last record and whether a due run is missing.
-     * A task is missed when no run started since its last due time older than the grace period, unless
-     * its last record is a skip. A task that never ran is missed too.
+     * Tasks published by the scheduler with their next run, last run and whether a due run is missing.
+     * A task is missed when its latest slot older than the grace period has neither a run nor a skip
+     * since, and passed after the task was first seen. Stale tasks are never missed.
      *
-     * @return Collection<int, array{key: string, command: ?string, description: ?string, expression: string, timezone: ?string, next_run: Carbon, last_run: ?array<string, mixed>, missed: bool}>
+     * Each task has the columns of its row, `environments` decoded, and `stale`, `next_run` (null when
+     * stale), `last_run` and `missed`.
+     *
+     * @return Collection<int, array<string, mixed>>
      */
     public function tasks(): Collection
     {
-        $tasks = array_values($this->schedule()->events());
-        $keys = ScheduleModule::keys($tasks);
-        $lastRuns = $this->lastRuns($keys);
-        $grace = (int) config('spyglass.modules.schedule.missed_after', 90);
+        $tasks = $this->spyglass->connection()->table(ScheduleModule::TASKS)
+            ->orderBy('label')
+            ->orderBy('key')
+            ->limit(self::MAX_TASKS)
+            ->get();
 
-        return collect($tasks)->map(fn (Task $task, int $i) => [
-            'key' => $keys[$i],
-            'command' => is_string($task->command) ? Task::normalizeCommand($task->command) : null,
-            'description' => is_string($task->description) ? $task->description : null,
-            'expression' => $task->getExpression(),
-            'timezone' => ScheduleModule::timezone($task),
-            'next_run' => $task->nextRunDate(Date::now()),
-            'last_run' => $lastRuns[$keys[$i]] ?? null,
-            'missed' => $this->missed($task, $lastRuns[$keys[$i]] ?? null, $grace),
-        ]);
+        $lastRuns = $this->lastRuns($tasks->pluck('key')->all());
+        $newest = $tasks->map(fn (object $task) => $this->date($task->last_seen_at))->max() ?? Date::now();
+
+        return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key] ?? null, $newest));
     }
 
     /**
-     * Runs of a task, newest first.
-     *
-     * @return LengthAwarePaginator<int, object>
+     * @param  array<string, mixed>|null  $lastRun
+     * @return array<string, mixed>
      */
-    public function runs(string $task, int $perPage = 25, int $page = 1): LengthAwarePaginator
+    protected function task(stdClass $task, ?array $lastRun, Carbon $newest): array
     {
-        return $this->runsOf($task)->paginate(max(1, min($perPage, 100)), page: $page);
+        $stale = $this->date($task->last_seen_at)->lt($newest->copy()->subSeconds(self::STALE_AFTER));
+
+        if ($lastRun !== null) {
+            $lastRun['status'] = $this->status($lastRun, superseded: false);
+        }
+
+        $task = [
+            'key' => $task->key,
+            'label' => $task->label,
+            'command' => $task->command,
+            'description' => $task->description,
+            'expression' => $task->expression,
+            'repeat_seconds' => $task->repeat_seconds === null ? null : (int) $task->repeat_seconds,
+            'timezone' => $task->timezone,
+            'environments' => $task->environments === null ? [] : (array) json_decode($task->environments, true),
+            'first_seen_at' => $task->first_seen_at,
+            'last_seen_at' => $task->last_seen_at,
+            'last_skipped_at' => $task->last_skipped_at,
+            'last_skip_reason' => $task->last_skip_reason,
+            'stale' => $stale,
+            'last_run' => $lastRun,
+        ];
+
+        return [...$task, 'next_run' => $stale ? null : $this->nextRun($task), 'missed' => ! $stale && $this->missed($task)];
     }
 
     /**
-     * A web request skips `routes/console.php` and `withSchedule()`: they run when Artisan boots.
-     * `output()` boots it without resolving the lazy commands, as `all()` would.
-     */
-    protected function schedule(): Schedule
-    {
-        app(ConsoleKernel::class)->output();
-
-        return app(Schedule::class);
-    }
-
-    /**
-     * The newest record of each task: one `LIMIT 1` index lookup per task, in a single query per chunk.
+     * Runs of a task, newest first. A run still `running` is `interrupted` when a later one started or
+     * when it is older than `interrupted_after`.
      *
-     * @param  list<string>  $keys
+     * @return Paginator<int, object>
+     */
+    public function runs(string $task, int $perPage = 25, int $page = 1): Paginator
+    {
+        $runs = $this->runsOf($task)->simplePaginate(max(1, min($perPage, 100)), page: $page);
+
+        foreach ($runs->items() as $i => $run) {
+            $run->status = $this->status((array) $run, superseded: $page > 1 || $i > 0);
+        }
+
+        return $runs;
+    }
+
+    /**
+     * The newest run of each task: one `LIMIT 1` index lookup per task, in a single query per chunk.
+     *
+     * @param  array<mixed>  $keys
      * @return array<string, array<string, mixed>>
      */
     protected function lastRuns(array $keys): array
@@ -107,18 +138,72 @@ class ScheduleQueries
     }
 
     /**
-     * @param  array<string, mixed>|null  $lastRun
+     * @param  array<string, mixed>  $run
      */
-    protected function missed(Task $task, ?array $lastRun, int $grace): bool
+    protected function status(array $run, bool $superseded): string
+    {
+        $interruptedAfter = (int) config('spyglass.modules.schedule.interrupted_after', 86400);
+
+        return $run['status'] === 'running'
+            && ($superseded || $this->date($run['started_at'])->lt(Date::now()->subSeconds($interruptedAfter)))
+            ? 'interrupted'
+            : $run['status'];
+    }
+
+    /**
+     * @param  array<string, mixed>  $task
+     */
+    protected function nextRun(array $task): ?Carbon
+    {
+        try {
+            $cron = new CronExpression($task['expression']);
+            $now = Date::now();
+
+            // Sub-minute tasks repeat from the start of every due minute.
+            if ($repeat = $task['repeat_seconds']) {
+                $minute = $now->copy()->setTimezone($task['timezone'])->startOfMinute();
+                $next = $minute->copy()->addSeconds((intdiv((int) $minute->diffInSeconds($now), $repeat) + 1) * $repeat);
+
+                if ($cron->isDue($minute, $task['timezone']) && $next->lt($minute->copy()->addMinute())) {
+                    return $next;
+                }
+            }
+
+            return Date::instance($cron->getNextRunDate($now, 0, false, $task['timezone']));
+        } catch (Throwable) {
+            // An expression the cron library cannot parse.
+            return null;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $task
+     */
+    protected function missed(array $task): bool
     {
         // Such tasks never fire any event, so they have no record to compare with.
-        if (! $task->runsInEnvironment(app()->environment()) || ($lastRun['status'] ?? null) === 'skipped') {
+        if ($task['environments'] !== [] && ! in_array(app()->environment(), $task['environments'], true)) {
             return false;
         }
 
-        $due = (new CronExpression($task->getExpression()))
-            ->getPreviousRunDate(Date::now()->subSeconds($grace), 0, true, ScheduleModule::timezone($task));
+        try {
+            $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
+            $slot = Date::instance((new CronExpression($task['expression']))->getPreviousRunDate($due, 0, true, $task['timezone']));
+        } catch (Throwable) {
+            return false;
+        }
 
-        return $lastRun === null || Date::parse($lastRun['started_at'])->lt($due);
+        if ($repeat = $task['repeat_seconds']) {
+            $slot->addSeconds(min(intdiv((int) $slot->diffInSeconds($due), $repeat), intdiv(59, $repeat)) * $repeat);
+        }
+
+        $satisfied = array_filter([$task['last_run']['started_at'] ?? null, $task['last_skipped_at']]);
+
+        return $slot->gt(max([$this->date($task['first_seen_at']), ...array_map($this->date(...), $satisfied)]));
+    }
+
+    protected function date(string $value): Carbon
+    {
+        return Date::parse($value, 'UTC');
     }
 }

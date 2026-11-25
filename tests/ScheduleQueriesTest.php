@@ -1,11 +1,12 @@
 <?php
 
-use Illuminate\Console\Application as ConsoleApplication;
+use Illuminate\Console\Events\ArtisanStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
@@ -14,110 +15,208 @@ use Keepsuit\Spyglass\Tests\Fixtures\WithScheduleModule;
 
 uses(WithScheduleModule::class);
 
-function insertRun(string $task, string $startedAt, string $status = 'success', string $host = 'web-1'): void
+beforeEach(function () {
+    Date::setTestNow('2026-01-01 12:00:30');
+});
+
+/**
+ * @param  array<string, mixed>  $attributes
+ */
+function insertTask(string $label, string $expression = '* * * * *', array $attributes = []): void
+{
+    DB::table(ScheduleModule::TASKS)->insert([
+        'key' => sha1($label),
+        'label' => $label,
+        'expression' => $expression,
+        'timezone' => 'UTC',
+        'first_seen_at' => '2025-01-01 00:00:00',
+        'last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s'),
+        ...$attributes,
+    ]);
+}
+
+function insertRun(string $label, string $startedAt, string $status = 'success', string $host = 'web-1'): void
 {
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(),
-        'task' => $task,
-        'expression' => '* * * * *',
+        'task' => sha1($label),
         'started_at' => $startedAt,
         'status' => $status,
         'host' => $host,
     ]);
 }
 
-function scheduledTask(string $key): array
+function scheduledTask(string $label): array
 {
-    return app(ScheduleQueries::class)->tasks()->firstWhere('key', $key);
+    return app(ScheduleQueries::class)->tasks()->firstWhere('label', $label);
 }
 
-it('lists the scheduled tasks with their next and last run', function () {
-    Date::setTestNow('2026-01-01 12:00:30');
-    app(Schedule::class)->command('spyglass:test')->everyFiveMinutes()->description('Test');
-    insertRun('php artisan spyglass:test', '2025-12-31 12:00:00', 'failed');
-    insertRun('php artisan spyglass:test', '2026-01-01 12:00:02.500');
+it('lists the published tasks with their next and last run', function () {
+    insertTask('report', '*/5 * * * *', ['command' => 'php artisan report', 'description' => 'Report', 'environments' => '["testing"]']);
+    insertRun('report', '2025-12-31 12:00:00', 'failed');
+    insertRun('report', '2026-01-01 12:00:02.500');
 
-    expect(scheduledTask('php artisan spyglass:test'))->toMatchArray([
-        'command' => 'php artisan spyglass:test',
-        'description' => 'Test',
+    expect(scheduledTask('report'))->toMatchArray([
+        'key' => sha1('report'),
+        'command' => 'php artisan report',
+        'description' => 'Report',
         'expression' => '*/5 * * * *',
+        'environments' => ['testing'],
+        'stale' => false,
         'missed' => false,
     ])
-        ->and(scheduledTask('php artisan spyglass:test')['next_run']->toDateTimeString())->toBe('2026-01-01 12:05:00')
-        ->and(scheduledTask('php artisan spyglass:test')['last_run'])->toMatchArray(['status' => 'success']);
+        ->and(scheduledTask('report')['next_run']->toDateTimeString())->toBe('2026-01-01 12:05:00')
+        ->and(scheduledTask('report')['last_run'])->toMatchArray(['status' => 'success']);
+});
+
+it('reads only the published tables, without starting Artisan', function () {
+    app(ConsoleKernel::class)->setArtisan(null);
+    app(Schedule::class)->command('spyglass:unpublished')->everyMinute();
+    insertTask('report');
+
+    $started = false;
+    Event::listen(ArtisanStarting::class, function () use (&$started) {
+        $started = true;
+    });
+
+    expect(app(ScheduleQueries::class)->tasks()->pluck('label')->all())->toBe(['report'])
+        ->and($started)->toBeFalse();
 });
 
 it('reports a task missed once its due run is older than the grace period', function () {
-    app(Schedule::class)->command('spyglass:test')->everyFiveMinutes();
-    insertRun('php artisan spyglass:test', '2026-01-01 11:55:02');
+    insertTask('report', '*/5 * * * *');
+    insertRun('report', '2026-01-01 11:55:02');
 
     Date::setTestNow('2026-01-01 12:01:29');
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeFalse();
+    expect(scheduledTask('report')['missed'])->toBeFalse();
 
     Date::setTestNow('2026-01-01 12:01:31');
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeTrue();
+    expect(scheduledTask('report')['missed'])->toBeTrue();
 
     Date::setTestNow('2026-01-01 12:00:30');
     config()->set('spyglass.modules.schedule.missed_after', 0);
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeTrue();
+    expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('reports a task that never ran as missed', function () {
-    app(Schedule::class)->command('spyglass:test')->everyMinute();
+it('reports a task that never ran as missed only once a slot passed after it was first seen', function () {
+    insertTask('report', '*/5 * * * *', ['first_seen_at' => '2026-01-01 12:01:00']);
 
-    expect(scheduledTask('php artisan spyglass:test'))->toMatchArray(['last_run' => null, 'missed' => true]);
+    Date::setTestNow('2026-01-01 12:06:29');
+    expect(scheduledTask('report'))->toMatchArray(['last_run' => null, 'missed' => false]);
+
+    Date::setTestNow('2026-01-01 12:06:31');
+    expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('does not report a task skipped by its filters as missed', function () {
-    Date::setTestNow('2026-01-01 12:00:00');
-    app(Schedule::class)->command('spyglass:test')->everyMinute()->when(false);
+it('counts a skip at or after the due time as satisfying it', function () {
+    insertTask('report', '*/5 * * * *', ['last_skipped_at' => '2026-01-01 12:00:00', 'last_skip_reason' => 'condition_not_met']);
+    insertRun('report', '2026-01-01 10:00:00');
 
-    $this->artisan('schedule:run');
-    Date::setTestNow('2026-01-01 12:30:00');
+    Date::setTestNow('2026-01-01 12:04:00');
+    expect(scheduledTask('report'))->toMatchArray(['missed' => false, 'last_skip_reason' => 'condition_not_met'])
+        ->and(scheduledTask('report')['last_run']['started_at'])->toStartWith('2026-01-01 10:00:00');
 
-    expect(scheduledTask('php artisan spyglass:test'))->toMatchArray(['missed' => false])
-        ->and(scheduledTask('php artisan spyglass:test')['last_run'])->toMatchArray(['status' => 'skipped']);
+    Date::setTestNow('2026-01-01 12:06:31');
+    expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
 it('does not report tasks of other environments as missed', function () {
-    app(Schedule::class)->command('spyglass:test')->everyMinute()->environments('production');
+    insertTask('report', attributes: ['environments' => '["production"]']);
 
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeFalse();
+    expect(scheduledTask('report')['missed'])->toBeFalse();
 });
 
 it('computes the due time in the task timezone', function () {
     // 09:00 in New York is 14:00 UTC.
-    app(Schedule::class)->command('spyglass:test')->dailyAt('09:00')->timezone('America/New_York');
-    insertRun('php artisan spyglass:test', '2025-12-31 14:00:05');
+    insertTask('report', '0 9 * * *', ['timezone' => 'America/New_York']);
+    insertRun('report', '2025-12-31 14:00:05');
 
     Date::setTestNow('2026-01-01 10:00:00');
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeFalse();
+    expect(scheduledTask('report')['missed'])->toBeFalse()
+        ->and(scheduledTask('report')['next_run']->utc()->toDateTimeString())->toBe('2026-01-01 14:00:00');
 
     Date::setTestNow('2026-01-01 14:05:00');
-    expect(scheduledTask('php artisan spyglass:test')['missed'])->toBeTrue();
+    expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('loads the last runs of all tasks in one bounded query', function () {
+it('computes the next run and the due time of sub-minute tasks from their interval', function () {
+    insertTask('poll', '* * * * *', ['repeat_seconds' => 10]);
+    insertTask('weekly poll', '* * * * 1', ['repeat_seconds' => 30]);
+    insertRun('poll', '2026-01-01 11:59:00');
+
+    expect(scheduledTask('poll')['next_run']->toDateTimeString())->toBe('2026-01-01 12:00:40')
+        // 2026-01-01 is a Thursday.
+        ->and(scheduledTask('weekly poll')['next_run']->toDateTimeString())->toBe('2026-01-05 00:00:00');
+
+    // The latest slot older than the grace period is 11:59:00.
+    Date::setTestNow('2026-01-01 12:00:39');
+    expect(scheduledTask('poll')['missed'])->toBeFalse();
+
+    // Now it is 11:59:10.
+    Date::setTestNow('2026-01-01 12:00:41');
+    expect(scheduledTask('poll')['missed'])->toBeTrue();
+});
+
+it('shows tasks no longer published as stale, never as missed', function () {
+    insertTask('removed', attributes: ['last_seen_at' => '2026-01-01 11:00:00']);
+    insertTask('current');
+
+    expect(scheduledTask('removed'))->toMatchArray(['stale' => true, 'missed' => false, 'next_run' => null])
+        ->and(scheduledTask('current'))->toMatchArray(['stale' => false, 'missed' => true]);
+});
+
+it('shows every task as missed, not stale, when the scheduler stopped', function () {
+    insertTask('a', attributes: ['last_seen_at' => '2026-01-01 11:00:00']);
+    insertTask('b', attributes: ['last_seen_at' => '2026-01-01 11:00:00']);
+
+    expect(app(ScheduleQueries::class)->tasks()->map(fn ($task) => [$task['stale'], $task['missed']])->all())
+        ->toBe([[false, true], [false, true]]);
+});
+
+it('shows a run that never finished as interrupted after the threshold', function () {
+    insertTask('report');
+    insertRun('report', '2025-12-31 12:30:00', 'running');
+
+    expect(scheduledTask('report')['last_run']['status'])->toBe('running');
+
+    config()->set('spyglass.modules.schedule.interrupted_after', 3600);
+    expect(scheduledTask('report')['last_run']['status'])->toBe('interrupted');
+});
+
+it('shows a running run superseded by a later one as interrupted', function () {
+    insertRun('report', '2026-01-01 11:58:00', 'running');
+    insertRun('report', '2026-01-01 11:59:00', 'success');
+    insertRun('report', '2026-01-01 12:00:00', 'running');
+
+    expect(collect(app(ScheduleQueries::class)->runs(sha1('report'))->items())->pluck('status')->all())
+        ->toBe(['running', 'success', 'interrupted'])
+        ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 1)->items())->pluck('status')->all())
+        ->toBe(['running'])
+        ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 3)->items())->pluck('status')->all())
+        ->toBe(['interrupted']);
+});
+
+it('loads the tasks and their last runs in two bounded queries', function () {
     foreach (['a', 'b', 'c'] as $name) {
-        app(Schedule::class)->command("spyglass:{$name}")->everyMinute();
-        insertRun("php artisan spyglass:{$name}", '2026-01-01 11:00:00', 'failed');
-        insertRun("php artisan spyglass:{$name}", '2026-01-01 12:00:00');
+        insertTask($name);
+        insertRun($name, '2026-01-01 11:00:00', 'failed');
+        insertRun($name, '2026-01-01 12:00:00');
     }
 
     $queries = [];
     Spyglass::connection()->listen(function (QueryExecuted $query) use (&$queries) {
-        $queries[] = $query->sql;
+        $queries[] = strtolower($query->sql);
     });
 
     $tasks = app(ScheduleQueries::class)->tasks();
 
-    expect($queries)->toHaveCount(1)
-        ->and(substr_count(strtolower($queries[0]), 'limit 1'))->toBe($tasks->count())
-        ->and($tasks->pluck('last_run.status', 'key')->only(['php artisan spyglass:a', 'php artisan spyglass:b', 'php artisan spyglass:c'])->all())
-        ->toBe(['php artisan spyglass:a' => 'success', 'php artisan spyglass:b' => 'success', 'php artisan spyglass:c' => 'success']);
+    expect($queries)->toHaveCount(2)
+        ->and($queries[0])->toContain('limit')
+        ->and(substr_count($queries[1], 'limit 1'))->toBe(3)
+        ->and($tasks->pluck('last_run.status', 'label')->all())->toBe(['a' => 'success', 'b' => 'success', 'c' => 'success']);
 });
 
-it('paginates the runs of a task, newest first', function () {
+it('paginates the runs of a task, newest first, without counting them', function () {
     foreach (range(1, 5) as $minute) {
         insertRun('task', "2026-01-01 12:0{$minute}:00");
     }
@@ -128,23 +227,13 @@ it('paginates the runs of a task, newest first', function () {
         $queries[] = strtolower($query->sql);
     });
 
-    $page = app(ScheduleQueries::class)->runs('task', perPage: 2, page: 2);
+    $page = app(ScheduleQueries::class)->runs(sha1('task'), perPage: 2, page: 2);
 
-    expect($page->total())->toBe(5)
+    expect($page->hasMorePages())->toBeTrue()
         ->and(collect($page->items())->pluck('started_at')->map(fn ($at) => substr($at, 0, 16))->all())
         ->toBe(['2026-01-01 12:03', '2026-01-01 12:02'])
-        ->and(collect($queries)->reject(fn ($sql) => str_contains($sql, 'count(*)'))->every(fn ($sql) => str_contains($sql, 'limit')))->toBeTrue()
+        ->and($queries)->toHaveCount(1)
+        ->and($queries[0])->toContain('limit')
+        ->and($queries[0])->not->toContain('count(')
         ->and(app(ScheduleQueries::class)->runs('task', perPage: 1000)->perPage())->toBe(100);
-});
-
-it('includes tasks defined when Artisan starts, as `withSchedule()` does', function () {
-    // As in a web request, where Artisan has not started yet.
-    app(ConsoleKernel::class)->setArtisan(null);
-    ConsoleApplication::starting(fn () => app(Schedule::class)->command('spyglass:test')->everyMinute());
-
-    try {
-        expect(app(ScheduleQueries::class)->tasks()->pluck('key'))->toContain('php artisan spyglass:test');
-    } finally {
-        ConsoleApplication::forgetBootstrappers();
-    }
 });
