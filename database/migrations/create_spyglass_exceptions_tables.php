@@ -36,6 +36,9 @@ return new class extends Migration
             $table->dateTime('occurred_at', 3)->index();
             $table->text('message');
             $table->json('trace');
+            // The innermost `getPrevious()`: what a wrapping exception hides.
+            $table->string('cause_class', 255)->nullable();
+            $table->text('cause_message')->nullable();
             $table->string('source_type', 16);
             $table->text('source')->nullable();
             // The scheduled task run or the job uuid.

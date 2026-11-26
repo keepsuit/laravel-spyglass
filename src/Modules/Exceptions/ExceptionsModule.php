@@ -105,6 +105,7 @@ class ExceptionsModule extends Module
                         'occurred_at' => $now,
                         'message' => $message,
                         'trace' => json_encode($this->trace($e), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+                        ...$this->cause($e),
                         'user_id' => $this->userId(),
                         ...$source,
                     ] : null,
@@ -135,6 +136,24 @@ class ExceptionsModule extends Module
         if ($entry['occurrence'] !== null) {
             Spyglass::insert(self::OCCURRENCES, $entry['occurrence']);
         }
+    }
+
+    /**
+     * @return array{cause_class: ?string, cause_message: ?string}
+     */
+    protected function cause(Throwable $e): array
+    {
+        $cause = null;
+
+        // Bounded: a chain can loop when an exception is set as its own previous through reflection. Not past a
+        // query error: what it wraps is the driver error, whose message can hold the data.
+        for ($previous = $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50 && ! $cause instanceof QueryException; $previous = $previous->getPrevious(), $depth++) {
+            $cause = $previous;
+        }
+
+        return $cause === null
+            ? ['cause_class' => null, 'cause_message' => null]
+            : ['cause_class' => $this->truncate($cause::class, 255), 'cause_message' => $this->message($cause)];
     }
 
     protected function message(Throwable $e): string

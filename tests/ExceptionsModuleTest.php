@@ -588,6 +588,18 @@ it('prunes groups resolved before their retention, unless they occurred again', 
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
 });
 
+it('stores the root cause of a wrapped exception, without query bindings', function () {
+    $query = new QueryException('testing', 'select * from users where email = ?', ['secret@example.com'], new PDOException('boom'));
+
+    reportAndFlush(new RuntimeException('Sync failed', previous: new LogicException('Retry failed', previous: $query)));
+    reportAndFlush(new ExceptionsModuleTestException);
+
+    expect(array_map(fn ($occurrence) => [$occurrence['cause_class'], $occurrence['cause_message']], exceptionOccurrences()))->toBe([
+        [QueryException::class, 'SQLSTATE[0]: select * from users where email = ?'],
+        [null, null],
+    ]);
+});
+
 it('counts every source of a group, beyond the throttled occurrences', function () {
     Route::get('/checkout', fn () => throw sameSiteException());
     Route::get('/orders/{order}', fn () => throw sameSiteException());
