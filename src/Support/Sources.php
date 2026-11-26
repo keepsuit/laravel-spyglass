@@ -10,6 +10,7 @@ use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
@@ -25,25 +26,35 @@ use WeakMap;
  */
 final class Sources
 {
+    /** Hidden Context key carrying the source of a scheduled task to its background process. */
+    public const string CONTEXT_SOURCE = 'spyglass_source';
+
     private const int MAX_BYTES = 4096;
 
     /**
      * The job being processed by a worker, with the Context captured before tenancy can revert it.
      *
-     * @var array{source: string, source_id: ?string, scope: ?string, context: ?string}|null
+     * @var array{source_type: string, source: string, source_id: ?string, scope: ?string, context: ?string}|null
      */
     private ?array $job = null;
 
     /**
-     * The job each exception was thrown by: the worker reports it after the attempt ended.
+     * The scheduled task running in this process.
      *
-     * @var WeakMap<Throwable, array{source: string, source_id: ?string, scope: ?string, context: ?string}>
+     * @var array{source_type: string, source: string, source_id: ?string, scope: ?string, context: ?string}|null
      */
-    private WeakMap $jobs;
+    private ?array $task = null;
+
+    /**
+     * The job or task each exception was thrown by: both are reported after their end event.
+     *
+     * @var WeakMap<Throwable, array{source_type: string, source: string, source_id: ?string, scope: ?string, context: ?string}>
+     */
+    private WeakMap $thrown;
 
     public function __construct()
     {
-        $this->jobs = new WeakMap;
+        $this->thrown = new WeakMap;
     }
 
     public function register(): void
@@ -51,12 +62,12 @@ final class Sources
         // Sync jobs run inside the dispatching request or command, which is their source.
         Event::listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
-                $this->job = ['source' => JobName::from($event->job->payload()), 'source_id' => $event->job->uuid(), ...Spyglass::captureContext()];
+                $this->job = ['source_type' => 'job', 'source' => JobName::from($event->job->payload()), 'source_id' => $event->job->uuid(), ...Spyglass::captureContext()];
             }
         });
         Event::listen(JobExceptionOccurred::class, function (JobExceptionOccurred $event) {
             if ($this->job !== null && ! $event->job instanceof SyncJob) {
-                $this->jobs[$event->exception] = $this->job;
+                $this->thrown[$event->exception] = $this->job;
             }
         });
         // `queue:work --once` never loops, so the job must not outlive its attempt.
@@ -68,19 +79,40 @@ final class Sources
     }
 
     /**
-     * The source of an entry recorded now, or of `$exception` when it is reported after its job ended.
+     * Until `leaveTask()`, entries come from the scheduled task run `$id`.
+     */
+    public function enterTask(string $label, string $id): void
+    {
+        $this->task = ['source_type' => 'schedule', 'source' => $label, 'source_id' => $id, ...Spyglass::captureContext()];
+    }
+
+    /**
+     * @param  Throwable|null  $exception  the exception that failed the task, which Laravel reports afterwards
+     */
+    public function leaveTask(?Throwable $exception = null): void
+    {
+        if ($exception !== null && $this->task !== null) {
+            $this->thrown[$exception] = $this->task;
+        }
+
+        $this->task = null;
+    }
+
+    /**
+     * The source of an entry recorded now, or of `$exception` when it is reported after its job or task ended.
      *
      * @return array{source_type: string, source: ?string, source_id: ?string, route: ?string, scope: ?string, context: ?string}
      */
     public function current(?Throwable $exception = null): array
     {
-        $job = ($exception === null ? null : $this->jobs[$exception] ?? null) ?? $this->job;
+        // In memory before the hidden Context, which also travels into the jobs a background task dispatches.
+        $source = ($exception === null ? null : $this->thrown[$exception] ?? null) ?? $this->job ?? $this->task ?? $this->background();
 
-        if ($job !== null) {
+        if ($source !== null) {
             // The snapshot covers tenancy reverting the context before the failure is reported, not a job that switched tenant.
             $current = Spyglass::captureContext();
 
-            return ['source_type' => 'job', 'route' => null, ...$job, ...($current['scope'] !== null ? $current : [])];
+            return ['route' => null, ...$source, ...($current['scope'] !== null ? $current : [])];
         }
 
         $kernel = app()->resolved(HttpKernelContract::class) ? app(HttpKernelContract::class) : null;
@@ -106,6 +138,20 @@ final class Sources
             'route' => $route->getName(),
             ...Spyglass::captureContext(),
         ];
+    }
+
+    /**
+     * The scheduled task a background process runs for, passed on by Laravel in the Context.
+     *
+     * @return array{source_type: string, source: string, source_id: ?string, scope: ?string, context: ?string}|null
+     */
+    private function background(): ?array
+    {
+        $source = Context::getHidden(self::CONTEXT_SOURCE);
+
+        return is_array($source) && is_string($source['source'] ?? null)
+            ? ['source_type' => 'schedule', 'source' => $source['source'], 'source_id' => is_string($source['source_id'] ?? null) ? $source['source_id'] : null, ...Spyglass::captureContext()]
+            : null;
     }
 
     /**
