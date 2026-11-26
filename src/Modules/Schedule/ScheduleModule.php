@@ -18,6 +18,7 @@ use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event as Task;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Console\Scheduling\ScheduleRunCommand;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
@@ -165,6 +166,42 @@ class ScheduleModule extends Module
             self::TASKS => ['column' => 'last_seen_at', 'retention' => 'runs'],
             self::RUNS => ['column' => 'started_at', 'retention' => 'runs'],
         ];
+    }
+
+    /**
+     * Keep the newest runs of each task by outcome: a task that runs every minute would otherwise keep
+     * 43,200 runs over the retention.
+     */
+    public function prune(): array
+    {
+        $db = Spyglass::connection();
+        $deleted = 0;
+        $keep = [
+            'successful_runs_per_task' => fn (Builder $query) => $query->where('status', 'success'),
+            'failed_runs_per_task' => fn (Builder $query) => $query->where('status', '!=', 'success'),
+        ];
+
+        foreach ($db->table(self::RUNS)->distinct()->pluck('task') as $task) {
+            foreach ($keep as $config => $outcome) {
+                $limit = config("spyglass.modules.schedule.retention.{$config}");
+
+                if (! is_numeric($limit)) {
+                    continue;
+                }
+
+                // Short batches keep locks and the transaction log small on large tables.
+                do {
+                    $ids = $db->table(self::RUNS)->where('task', $task)->where($outcome)
+                        ->orderByDesc('started_at')->orderByDesc('id')
+                        ->offset(max(0, (int) $limit))->limit(1000)
+                        ->pluck('id');
+
+                    $deleted += $ids->isEmpty() ? 0 : $db->table(self::RUNS)->whereIn('id', $ids)->delete();
+                } while ($ids->count() === 1000);
+            }
+        }
+
+        return [self::RUNS => $deleted];
     }
 
     /**

@@ -664,6 +664,28 @@ it('records runs under the keys published with the schedule', function () {
         ->and(scheduleTask($second)->label)->toBe('true #2');
 });
 
+it('keeps only the newest runs of each task by outcome', function () {
+    config()->set(['spyglass.modules.schedule.retention.successful_runs_per_task' => 2, 'spyglass.modules.schedule.retention.failed_runs_per_task' => 3]);
+
+    foreach (['a', 'b'] as $task) {
+        foreach (range(1, 8) as $i) {
+            DB::table(ScheduleModule::RUNS)->insert([
+                'id' => (string) Str::ulid(),
+                'task' => $task,
+                'started_at' => now('UTC')->addMinutes($i)->format('Y-m-d H:i:s.v'),
+                'status' => ['success', 'failed', 'running'][$i % 3],
+                'host' => 'web-1',
+            ]);
+        }
+    }
+
+    $this->artisan('spyglass:prune')->assertSuccessful();
+
+    expect(scheduleRuns()->where('task', 'a')->map(fn ($run) => [(int) substr($run->started_at, 14, 2), $run->status])->values()->all())
+        ->toBe([[3, 'success'], [5, 'running'], [6, 'success'], [7, 'failed'], [8, 'running']])
+        ->and(scheduleRuns()->where('task', 'b'))->toHaveCount(5);
+});
+
 it('prunes runs and tasks not seen within the retention', function () {
     app(Schedule::class)->exec('false')->everyMinute();
     $this->artisan('schedule:run');
