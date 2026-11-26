@@ -237,19 +237,11 @@ class Spyglass
             }
 
             foreach ($inserts as $table => $rows) {
-                try {
-                    $this->storeInserts($db, $table, $rows);
-                } catch (Throwable $e) {
-                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
-                }
+                $this->storeInserts($db, $table, $rows);
             }
 
             foreach ($upserts as $table => $pending) {
-                try {
-                    $this->storeUpserts($db, $table, $pending);
-                } catch (Throwable $e) {
-                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
-                }
+                $this->storeUpserts($db, $table, $pending);
             }
         });
     }
@@ -340,7 +332,7 @@ class Spyglass
     {
         foreach ($this->groupByColumns($rows) as $group) {
             foreach (array_chunk($group, $this->chunkSize($group[0])) as $chunk) {
-                $db->table($table)->insert($chunk);
+                $this->storeChunk($table, fn () => $db->table($table)->insert($chunk));
             }
         }
     }
@@ -366,26 +358,46 @@ class Spyglass
         }
 
         foreach ($groups as $group) {
-            $first = $group[0];
-            $update = array_keys($first['values']);
+            $this->storeChunk($table, fn () => $this->storeUpsertGroup($db, $table, $group));
+        }
+    }
 
-            foreach (array_keys($first['increment']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
-            }
+    /**
+     * @param  non-empty-list<array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>, min: array<string, mixed>}>  $group
+     */
+    protected function storeUpsertGroup(Connection $db, string $table, array $group): void
+    {
+        $first = $group[0];
+        $update = array_keys($first['values']);
 
-            foreach (array_keys($first['max']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
-            }
+        foreach (array_keys($first['increment']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
+        }
 
-            foreach (array_keys($first['min']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'min');
-            }
+        foreach (array_keys($first['max']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
+        }
 
-            $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'] + $entry['min'], $group);
+        foreach (array_keys($first['min']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'min');
+        }
 
-            foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
-                $db->table($table)->upsert($chunk, array_keys($first['key']), $update);
-            }
+        $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'] + $entry['min'], $group);
+
+        foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
+            $this->storeChunk($table, fn () => $db->table($table)->upsert($chunk, array_keys($first['key']), $update));
+        }
+    }
+
+    /**
+     * One rejected statement, such as a row PostgreSQL refuses, must not drop the other rows of its table.
+     */
+    protected function storeChunk(string $table, Closure $store): void
+    {
+        try {
+            $store();
+        } catch (Throwable $e) {
+            $this->report("Spyglass failed to store entries in [{$table}]", $e);
         }
     }
 

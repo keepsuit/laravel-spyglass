@@ -14,7 +14,8 @@ class PruneCommand extends Command
     public function handle(Spyglass $spyglass): int
     {
         foreach ($spyglass->modules() as $name => $module) {
-            foreach ($module->prunable() as $table => ['column' => $column, 'retention' => $retention]) {
+            foreach ($module->prunable() as $table => $rule) {
+                ['column' => $column, 'retention' => $retention] = $rule;
                 $days = config("spyglass.modules.{$name}.retention.{$retention}");
 
                 if (! is_numeric($days)) {
@@ -22,6 +23,7 @@ class PruneCommand extends Command
                 }
 
                 $query = $spyglass->connection()->table($table)
+                    ->when($rule['kind'] ?? null, fn ($query, string $kind) => $query->where('kind', $kind))
                     ->where($column, '<', now('UTC')->subDays((int) $days))
                     ->limit(1000);
 
@@ -32,7 +34,7 @@ class PruneCommand extends Command
                     $deleted += $batch = $query->delete();
                 } while ($batch === 1000);
 
-                $this->components->twoColumnDetail($table, "{$deleted} deleted");
+                $this->components->twoColumnDetail(isset($rule['kind']) ? "{$table} ({$rule['kind']})" : $table, "{$deleted} deleted");
             }
 
             foreach ($module->prune() as $table => $deleted) {

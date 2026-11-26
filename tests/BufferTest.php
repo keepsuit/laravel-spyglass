@@ -180,6 +180,19 @@ it('stores the other tables when one of them fails', function () {
     $this->spyglassErrors = [];
 });
 
+it('stores the other rows of a table when one statement fails', function () {
+    Spyglass::insert('spyglass_test_entries', ['name' => 'rejected', 'missing_column' => 1]);
+    Spyglass::insert('spyglass_test_entries', ['name' => 'kept']);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'rejected'], values: ['missing_column' => 1]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'kept'], increment: ['count' => 1]);
+    Spyglass::flush();
+
+    expect(array_column(entries(), 'name'))->toBe(['kept'])
+        ->and(DB::table('spyglass_test_counters')->pluck('name')->all())->toBe(['kept'])
+        ->and($this->spyglassErrors)->toHaveCount(1);
+    $this->spyglassErrors = [];
+});
+
 it('limits each statement to 999 bound parameters', function () {
     foreach (range(1, 1000) as $i) {
         Spyglass::insert('spyglass_test_entries', ['name' => "entry {$i}"]);

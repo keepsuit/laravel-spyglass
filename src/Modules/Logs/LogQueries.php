@@ -36,10 +36,12 @@ class LogQueries
     public function entries(array $filters = [], int $perPage = 50, int $page = 1): Paginator
     {
         return $this->spyglass->connection()->table(LogsModule::ENTRIES)
+            ->select(['id', 'level', 'message', 'body as log_context', 'recorded_at as logged_at', 'source_type', 'source', 'source_id', 'scope', 'context'])
+            ->where('kind', 'log')
             ->where(array_intersect_key($filters, array_flip(['level', 'scope'])))
-            ->when($filters['from'] ?? null, fn (Builder $query, CarbonInterface $from) => $query->where('logged_at', '>=', $from->copy()->utc()->toDateTimeString()))
-            ->when($filters['to'] ?? null, fn (Builder $query, CarbonInterface $to) => $query->where('logged_at', '<=', $to->copy()->utc()->toDateTimeString()))
-            ->orderByDesc('logged_at')
+            ->when($filters['from'] ?? null, fn (Builder $query, CarbonInterface $from) => $query->where('recorded_at', '>=', $from->copy()->utc()->format('Y-m-d H:i:s.v')))
+            ->when($filters['to'] ?? null, fn (Builder $query, CarbonInterface $to) => $query->where('recorded_at', '<=', $to->copy()->utc()->format('Y-m-d H:i:s.v')))
+            ->orderByDesc('recorded_at')
             ->orderByDesc('id')
             ->simplePaginate(max(1, min($perPage, 100)), page: $page);
     }

@@ -8,6 +8,7 @@ use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Modules\Exceptions\Throttle;
 use Keepsuit\Spyglass\Support\Sources;
+use Keepsuit\Spyglass\Support\Text;
 use Monolog\Handler\AbstractHandler;
 use Monolog\Level;
 use Monolog\LogRecord;
@@ -18,8 +19,6 @@ use Throwable;
  */
 class LogHandler extends AbstractHandler
 {
-    protected const int MAX_BYTES = 4096;
-
     /** Entries stored per request, job, scheduled task or minute, so distinct messages cannot flood the table either. */
     protected const int MAX_ENTRIES = 100;
 
@@ -74,7 +73,7 @@ class LogHandler extends AbstractHandler
                 $source = app(Sources::class)->current($exception);
 
                 // A message can embed the exception's, as Laravel's log of a reported exception does: a query error's carries the bindings.
-                $message = $this->truncate($exception !== null && $exception->getMessage() !== ''
+                $message = Text::clip($exception !== null && $exception->getMessage() !== ''
                     ? str_replace($exception->getMessage(), ExceptionsModule::safeMessage($exception), $record->message)
                     : $record->message);
                 $level = $record->level->toPsrLogLevel();
@@ -89,7 +88,7 @@ class LogHandler extends AbstractHandler
                     'message' => $message,
                     'source' => $source,
                     'stored' => $stored,
-                    'log_context' => ! $stored || $record->context === [] ? null : $this->truncate($this->encode($record->context)),
+                    'log_context' => ! $stored || $record->context === [] ? null : Text::clip($this->encode($record->context)),
                 ];
             } catch (Throwable $e) {
                 Spyglass::report('Spyglass failed to record a log entry', $e);
@@ -110,10 +109,12 @@ class LogHandler extends AbstractHandler
         if ($result['stored']) {
             $this->stored++;
             Spyglass::insert(LogsModule::ENTRIES, [
+                'kind' => 'log',
+                'signature' => LogsModule::signature($result['level'], $result['message']),
                 'level' => $result['level'],
                 'message' => $result['message'],
-                'log_context' => $result['log_context'],
-                'logged_at' => Date::now('UTC')->toDateTimeString(),
+                'body' => $result['log_context'],
+                'recorded_at' => Date::now('UTC')->format('Y-m-d H:i:s.v'),
                 ...Arr::except($result['source'], ['route', 'name']),
             ]);
         }
@@ -131,13 +132,5 @@ class LogHandler extends AbstractHandler
             : $value, $context);
 
         return (string) json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
-    }
-
-    /**
-     * Invalid UTF-8 and NUL bytes would make PostgreSQL reject the whole batch.
-     */
-    protected function truncate(string $value): string
-    {
-        return mb_strcut(mb_scrub(str_replace("\0", '', $value), 'UTF-8'), 0, self::MAX_BYTES, 'UTF-8');
     }
 }

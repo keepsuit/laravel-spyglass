@@ -24,6 +24,7 @@ use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Support\JobName;
+use Keepsuit\Spyglass\Support\Text;
 use Throwable;
 use WeakMap;
 
@@ -217,13 +218,13 @@ class QueueModule extends Module
 
         // `queue:retry` keeps the uuid, so a retried job that fails again updates its row.
         Spyglass::upsert(self::FAILED_JOBS, ['uuid' => $uuid], values: [
-            'connection' => mb_substr($event->connectionName, 0, 64),
-            'queue' => mb_substr($snapshot['queue'], 0, 191),
-            'job' => mb_substr(JobName::from($job->payload()), 0, 255),
+            'connection' => Text::clip($event->connectionName, 64),
+            'queue' => Text::clip($snapshot['queue'], 191),
+            'job' => Text::clip(JobName::from($job->payload()), 255),
             'attempts' => $job->attempts(),
-            'exception_class' => mb_substr($event->exception::class, 0, 255),
+            'exception_class' => Text::clip($event->exception::class, 255),
             'fingerprint' => ExceptionFingerprint::for($event->exception),
-            'scope' => $snapshot['scope'] === null ? null : mb_substr($snapshot['scope'], 0, 191),
+            'scope' => $snapshot['scope'] === null ? null : Text::clip($snapshot['scope'], 191),
             'context' => $snapshot['context'],
             'failed_at' => now()->toDateTimeString(),
         ]);
@@ -265,16 +266,16 @@ class QueueModule extends Module
         $key = [
             // A string, so keys of the same bucket merge in the buffer.
             'bucket' => $now->setTimestamp(intdiv($now->getTimestamp(), 300) * 300)->toDateTimeString(),
-            'connection' => mb_substr($connection, 0, 64),
-            'queue' => mb_substr($queue, 0, 191),
-            'job' => mb_substr($job, 0, 255),
+            'connection' => Text::clip($connection, 64),
+            'queue' => Text::clip($queue, 191),
+            'job' => Text::clip($job, 255),
         ];
 
         // The unscoped row is the total of every scope, so unfiltered reads never sum scoped rows.
         Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => ''], increment: $increment, max: ['duration_max' => $duration ?? 0]);
 
         if ($scope !== null && $scope !== '' && config('spyglass.modules.queue.aggregate_by_scope')) {
-            Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => mb_substr($scope, 0, 191)], increment: $increment, max: ['duration_max' => $duration ?? 0]);
+            Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => Text::clip($scope, 191)], increment: $increment, max: ['duration_max' => $duration ?? 0]);
         }
     }
 }

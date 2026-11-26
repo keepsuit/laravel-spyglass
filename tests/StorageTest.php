@@ -69,3 +69,15 @@ it('keeps the application working when the storage server is unreachable', funct
     DB::purge($name);
     DB::connection($name)->setPdo($pdo);
 });
+
+it('publishes a single migration for every table', function () {
+    $this->artisan('vendor:publish', ['--tag' => 'spyglass-migrations'])->assertSuccessful();
+
+    $published = glob(database_path('migrations/*_create_spyglass_tables.php'));
+
+    try {
+        expect($published)->toHaveCount(1);
+    } finally {
+        array_map(unlink(...), $published);
+    }
+});

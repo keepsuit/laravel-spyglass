@@ -6,13 +6,12 @@ use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Facades\Spyglass;
-use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
-use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\WithAllModules;
@@ -26,9 +25,9 @@ beforeEach(function () {
 /**
  * @return list<array{string, ?string, ?string}>
  */
-function sourcesOf(string $table): array
+function sourcesOf(Builder $table): array
 {
-    return DB::table($table)->orderBy('id')->get()->map(fn ($row) => [$row->source_type, $row->source, $row->source_id])->all();
+    return $table->orderBy('id')->get()->map(fn ($row) => [$row->source_type, $row->source, $row->source_id])->all();
 }
 
 it('attributes what a scheduled task reports and logs to its run, including the exception that failed it', function () {
@@ -43,8 +42,8 @@ it('attributes what a scheduled task reports and logs to its run, including the 
 
     $run = DB::table(ScheduleModule::RUNS)->sole();
 
-    expect(sourcesOf(ExceptionsModule::OCCURRENCES))->toBe([['schedule', 'sync orders', $run->id]])
-        ->and(sourcesOf(LogsModule::ENTRIES))->toBe([['schedule', 'sync orders', $run->id]]);
+    expect(sourcesOf(exceptionOccurrencesTable()))->toBe([['schedule', 'sync orders', $run->id]])
+        ->and(sourcesOf(logEntriesTable()))->toBe([['schedule', 'sync orders', $run->id]]);
 });
 
 it('attributes the failure of a command that exits with an error to its run', function () {
@@ -53,7 +52,7 @@ it('attributes the failure of a command that exits with an error to its run', fu
     test()->artisan('schedule:run');
     Spyglass::flush();
 
-    expect(sourcesOf(ExceptionsModule::OCCURRENCES))->toBe([['schedule', 'exit 3', DB::table(ScheduleModule::RUNS)->value('id')]]);
+    expect(sourcesOf(exceptionOccurrencesTable()))->toBe([['schedule', 'exit 3', DB::table(ScheduleModule::RUNS)->value('id')]]);
 });
 
 it('stops attributing entries to a task once it finished', function () {
@@ -63,7 +62,7 @@ it('stops attributing entries to a task once it finished', function () {
     Log::warning('Afterwards');
     Spyglass::flush();
 
-    expect(sourcesOf(LogsModule::ENTRIES)[0][0])->toBe('command');
+    expect(sourcesOf(logEntriesTable())[0][0])->toBe('command');
 });
 
 it('attributes what the process of a command task logs to its run', function (bool $background) {
@@ -86,7 +85,7 @@ it('attributes what the process of a command task logs to its run', function (bo
     Log::warning('In the background');
     Spyglass::flush();
 
-    expect(sourcesOf(LogsModule::ENTRIES))->toBe([['schedule', 'printenv __LARAVEL_CONTEXT', DB::table(ScheduleModule::RUNS)->value('id')]]);
+    expect(sourcesOf(logEntriesTable()))->toBe([['schedule', 'printenv __LARAVEL_CONTEXT', DB::table(ScheduleModule::RUNS)->value('id')]]);
 })->with(['foreground' => false, 'background' => true]);
 
 it('forgets the task a job inherited once the job ended', function () {
@@ -98,7 +97,7 @@ it('forgets the task a job inherited once the job ended', function () {
     Log::warning('After the job');
     Spyglass::flush();
 
-    expect(sourcesOf(LogsModule::ENTRIES)[0][0])->toBe('command');
+    expect(sourcesOf(logEntriesTable())[0][0])->toBe('command');
 });
 
 it('links the exception of an overlap skip to no run, since the skip is not one', function () {
@@ -118,7 +117,7 @@ it('links the exception of an overlap skip to no run, since the skip is not one'
     report($skipped);
     Spyglass::flush();
 
-    expect(sourcesOf(ExceptionsModule::OCCURRENCES))->toBe([
+    expect(sourcesOf(exceptionOccurrencesTable()))->toBe([
         ['schedule', 'exit 1', DB::table(ScheduleModule::RUNS)->value('id')],
         ['schedule', 'exit 1', null],
     ]);

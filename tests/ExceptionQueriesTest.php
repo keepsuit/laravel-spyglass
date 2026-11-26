@@ -11,7 +11,8 @@ uses(WithExceptionsModule::class);
 function seedExceptionGroup(string $fingerprint, array $group = [], array $scopes = []): void
 {
     DB::table(ExceptionsModule::GROUPS)->insert([
-        'fingerprint' => $fingerprint,
+        'kind' => 'exception',
+        'signature' => $fingerprint,
         'class' => RuntimeException::class,
         'message' => 'Boom',
         'file' => 'app/Foo.php',
@@ -24,10 +25,11 @@ function seedExceptionGroup(string $fingerprint, array $group = [], array $scope
 
     foreach ($scopes as $scope) {
         DB::table(ExceptionsModule::OCCURRENCES)->insert([
-            'fingerprint' => $fingerprint,
-            'occurred_at' => '2026-03-01 10:00:00',
+            'kind' => 'exception',
+            'signature' => $fingerprint,
+            'recorded_at' => '2026-03-01 10:00:00',
             'message' => 'Boom',
-            'trace' => '[]',
+            'body' => '[]',
             'source_type' => 'command',
             'scope' => $scope,
         ]);
@@ -70,7 +72,7 @@ it('paginates groups', function () {
 });
 
 it('shows a group with its occurrences, newest first', function () {
-    DB::table(ExceptionsModule::OCCURRENCES)->where('fingerprint', str_repeat('a', 40))->limit(1)->update(['occurred_at' => '2026-03-01 12:00:00', 'message' => 'Newest']);
+    DB::table(ExceptionsModule::OCCURRENCES)->where('signature', str_repeat('a', 40))->limit(1)->update(['recorded_at' => '2026-03-01 12:00:00', 'message' => 'Newest']);
 
     expect(exceptionQueries()->group(str_repeat('a', 40))->class)->toBe(RuntimeException::class)
         ->and(exceptionQueries()->group(str_repeat('z', 40)))->toBeNull()

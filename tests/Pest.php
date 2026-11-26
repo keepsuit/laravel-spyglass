@@ -3,8 +3,10 @@
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
+use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -48,4 +50,42 @@ function runToProcessEnd(string $scenario): Connection
     config()->set('database.connections.process', ['driver' => 'sqlite', 'database' => $file, 'prefix' => '']);
 
     return DB::connection('process');
+}
+
+/**
+ * Exception group totals, with the columns `ExceptionQueries` returns.
+ */
+function exceptionGroupsTable(?Connection $db = null): Builder
+{
+    return ($db ?? DB::connection())->table(Sources::GROUPS)
+        ->select(['id', 'signature as fingerprint', 'class', 'message', 'file', 'line', 'count', 'first_seen_at', 'last_seen_at', 'resolved_at'])
+        ->where('kind', 'exception')
+        ->where('source_type', '');
+}
+
+function exceptionOccurrencesTable(?Connection $db = null): Builder
+{
+    return ($db ?? DB::connection())->table(Sources::ENTRIES)
+        ->select([
+            'id', 'signature as fingerprint', 'recorded_at as occurred_at', 'message', 'body as trace', 'cause_class', 'cause_message',
+            'source_type', 'source', 'source_id', 'route', 'user_id', 'scope', 'context',
+        ])
+        ->where('kind', 'exception');
+}
+
+function logEntriesTable(): Builder
+{
+    return DB::table(Sources::ENTRIES)
+        ->select(['id', 'level', 'message', 'body as log_context', 'recorded_at as logged_at', 'source_type', 'source', 'source_id', 'scope', 'context'])
+        ->where('kind', 'log');
+}
+
+/**
+ * Source rows of exception groups and log messages, without the totals.
+ */
+function sourcesTable(): Builder
+{
+    return DB::table(Sources::GROUPS)
+        ->select(['id', 'kind', 'signature', 'source_type', 'source_hash', 'source', 'count', 'last_seen_at'])
+        ->where('source_type', '!=', '');
 }

@@ -12,9 +12,12 @@ uses(WithLogsModule::class);
 function seedLogEntry(string $message, string $loggedAt, array $values = []): void
 {
     DB::table(LogsModule::ENTRIES)->insert([
+        'kind' => 'log',
+        'signature' => sha1($message),
         'level' => 'error',
         'message' => $message,
-        'logged_at' => $loggedAt,
+        // As stored: compared as strings on SQLite.
+        'recorded_at' => $loggedAt.'.000',
         ...$values,
     ]);
 }

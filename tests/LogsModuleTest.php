@@ -10,9 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
 use Keepsuit\Spyglass\Modules\Logs\LogQueries;
-use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
-use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\WithLogsModule;
 use Monolog\Handler\NoopHandler;
 use Monolog\Handler\TestHandler;
@@ -24,7 +22,8 @@ uses(WithLogsModule::class);
 
 function logEntries(): array
 {
-    return DB::table(LogsModule::ENTRIES)->orderBy('id')->get()->map(fn ($row) => (array) $row)->all();
+    // To the second: drivers differ in how they return the milliseconds.
+    return logEntriesTable()->orderBy('id')->get()->map(fn ($row) => ['logged_at' => substr($row->logged_at, 0, 19)] + (array) $row)->all();
 }
 
 it('stores records at or above the configured level', function () {
@@ -349,7 +348,7 @@ it('prunes entries older than the retention', function () {
     $this->artisan('spyglass:prune')->assertSuccessful();
 
     expect(array_column(logEntries(), 'message'))->toBe(['New'])
-        ->and(DB::table(Sources::TABLE)->where('kind', 'log')->count())->toBe(1);
+        ->and(sourcesTable()->where('kind', 'log')->count())->toBe(1);
 });
 
 it('restarts the entry cap every minute in processes without lifecycles', function () {

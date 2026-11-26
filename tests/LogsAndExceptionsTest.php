@@ -1,17 +1,15 @@
 <?php
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
-use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsAndLogsModules;
 
 uses(WithExceptionsAndLogsModules::class);
 
 function logMessages(): array
 {
-    return DB::table(LogsModule::ENTRIES)->orderBy('id')->pluck('message')->all();
+    return logEntriesTable()->orderBy('id')->pluck('message')->all();
 }
 
 function sameSiteLoggedException(): RuntimeException
@@ -26,7 +24,7 @@ it('skips the log of exceptions recorded by the exceptions module', function () 
     Spyglass::flush();
 
     expect(logMessages())->toBe([])
-        ->and(DB::table(ExceptionsModule::GROUPS)->value('count'))->toBe(2);
+        ->and(exceptionGroupsTable()->first()->count)->toBe(2);
 });
 
 it('keeps manual logs of exceptions that were never reported', function () {
@@ -34,11 +32,11 @@ it('keeps manual logs of exceptions that were never reported', function () {
     Spyglass::flush();
 
     expect(logMessages())->toBe(['Manual'])
-        ->and(DB::table(ExceptionsModule::GROUPS)->count())->toBe(0);
+        ->and(exceptionGroupsTable()->count())->toBe(0);
 });
 
 it('records neither an exception nor a log entry for its own storage failures', function () {
-    Spyglass::connection()->getSchemaBuilder()->drop(ExceptionsModule::OCCURRENCES);
+    Spyglass::connection()->getSchemaBuilder()->drop(ExceptionsModule::GROUPS);
 
     report(sameSiteLoggedException());
     Spyglass::flush();
@@ -46,6 +44,23 @@ it('records neither an exception nor a log entry for its own storage failures', 
 
     expect($this->spyglassErrors)->toHaveCount(1)
         ->and(logMessages())->toBe([])
-        ->and(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([RuntimeException::class]);
+        ->and(exceptionOccurrencesTable()->pluck('message')->all())->toBe(['Reported']);
     $this->spyglassErrors = [];
+});
+
+it('prunes each kind of a shared table by its own retention', function () {
+    $this->travelTo(now()->subDays(10));
+    Log::error('Old log');
+    report(new LogicException('Old exception'));
+    Spyglass::flush();
+    $this->travelBack();
+
+    $this->artisan('spyglass:prune')->assertSuccessful();
+
+    // Logs are kept 7 days, exceptions 30.
+    expect(logMessages())->toBe([])
+        ->and(sourcesTable()->where('kind', 'log')->count())->toBe(0)
+        ->and(exceptionOccurrencesTable()->pluck('message')->all())->toBe(['Old exception'])
+        ->and(exceptionGroupsTable()->count())->toBe(1)
+        ->and(sourcesTable()->where('kind', 'exception')->count())->toBe(1);
 });

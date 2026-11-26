@@ -26,6 +26,7 @@ use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Support\Sources;
+use Keepsuit\Spyglass\Support\Text;
 use ReflectionFunction;
 use RuntimeException;
 use Throwable;
@@ -236,7 +237,7 @@ class ScheduleModule extends Module
 
             return [
                 'key' => sha1($ordinal.':'.$identity),
-                'label' => mb_substr($identity, 0, 240).($ordinal > 1 ? " #{$ordinal}" : ''),
+                'label' => Text::clip($identity, 240).($ordinal > 1 ? " #{$ordinal}" : ''),
             ];
         }, array_values($tasks));
     }
@@ -419,7 +420,7 @@ class ScheduleModule extends Module
             'status' => $status,
             'exit_code' => $exitCode,
             'output' => $output,
-            'exception_class' => $exception === null ? null : mb_substr($exception::class, 0, 255),
+            'exception_class' => $exception === null ? null : Text::clip($exception::class, 255),
             'fingerprint' => $exception === null ? null : ExceptionFingerprint::for($exception),
         ]);
     }
@@ -615,7 +616,7 @@ class ScheduleModule extends Module
 
     protected function host(): string
     {
-        return mb_substr((string) gethostname(), 0, 191);
+        return Text::clip((string) gethostname(), 191);
     }
 
     protected function now(): string
