@@ -8,6 +8,7 @@ use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -20,7 +21,6 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
-use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\ConcurrentException;
 use Keepsuit\Spyglass\Tests\Fixtures\ForwardingExceptionHandler;
 use Keepsuit\Spyglass\Tests\Fixtures\QueueJob;
@@ -59,12 +59,12 @@ function toSeconds(object $row): array
 
 function exceptionGroup(): array
 {
-    return toSeconds(DB::table(ExceptionsModule::GROUPS)->sole());
+    return toSeconds(exceptionGroupsTable()->sole());
 }
 
 function exceptionOccurrences(): array
 {
-    return DB::table(ExceptionsModule::OCCURRENCES)->orderBy('id')->get()->map(toSeconds(...))->all();
+    return exceptionOccurrencesTable()->orderBy('id')->get()->map(toSeconds(...))->all();
 }
 
 function reportAndFlush(Throwable $e): void
@@ -120,8 +120,8 @@ it('respects dontReport', function () {
 
     reportAndFlush(new ExceptionsModuleTestException('Ignored'));
 
-    expect(DB::table(ExceptionsModule::GROUPS)->count())->toBe(0)
-        ->and(DB::table(ExceptionsModule::OCCURRENCES)->count())->toBe(0);
+    expect(exceptionGroupsTable()->count())->toBe(0)
+        ->and(exceptionOccurrencesTable()->count())->toBe(0);
 });
 
 it('registers on a handler bound after boot, including decorators', function (Closure $handler) {
@@ -238,7 +238,7 @@ it('stores at most one occurrence per minute and fingerprint, and counts all of 
     SpyglassFacade::flush();
 
     expect(exceptionOccurrences())->toHaveCount(2)
-        ->and(DB::table(ExceptionsModule::GROUPS)->orderBy('class')->pluck('count')->all())->toBe([1, 3]);
+        ->and(exceptionGroupsTable()->orderBy('class')->pluck('count')->all())->toBe([1, 3]);
 
     $this->travel(61)->seconds();
     reportAndFlush(sameSiteException());
@@ -331,7 +331,7 @@ it('does not record exceptions reported by application code it runs while record
 
     reportAndFlush(sameSiteException());
 
-    expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([RuntimeException::class]);
+    expect(exceptionGroupsTable()->pluck('class')->all())->toBe([RuntimeException::class]);
 });
 
 it('stores neither the path nor the query string of a request not routed yet', function () {
@@ -426,7 +426,7 @@ it('does not let a job outlive its attempt in the source of later exceptions', f
 
     $this->get('/work')->assertOk();
 
-    expect(DB::table(ExceptionsModule::OCCURRENCES)->orderBy('id')->get(['source_type', 'source', 'scope'])->map(fn ($row) => (array) $row)->all())->toBe([
+    expect(exceptionOccurrencesTable()->orderBy('id')->get()->map(fn ($row) => Arr::only((array) $row, ['source_type', 'source', 'scope']))->all())->toBe([
         ['source_type' => 'job', 'source' => TestJob::class, 'scope' => 'acme'],
         ['source_type' => 'request', 'source' => 'GET /work', 'scope' => 'other'],
     ]);
@@ -503,9 +503,9 @@ it('truncates messages and bounds the trace', function () {
 
     $occurrence = exceptionOccurrences()[0];
 
-    expect(strlen(exceptionGroup()['message']))->toBe(4096)
+    expect(mb_strlen(exceptionGroup()['message']))->toBe(4096)
         ->and(mb_check_encoding(exceptionGroup()['message'], 'UTF-8'))->toBeTrue()
-        ->and(strlen($occurrence['message']))->toBe(4096)
+        ->and(mb_strlen($occurrence['message']))->toBe(4096)
         ->and(json_decode($occurrence['trace'], true))->toHaveCount(50);
 });
 
@@ -521,15 +521,15 @@ it('strips NUL bytes, which anonymous class names contain', function () {
 it('stores the occurrence of a fatal error when the process ends', function () {
     $db = runToProcessEnd('fatal');
 
-    expect($db->table(ExceptionsModule::GROUPS)->value('class'))->toBe(FatalError::class)
-        ->and($db->table(ExceptionsModule::OCCURRENCES)->count())->toBe(1);
+    expect(exceptionGroupsTable($db)->first()->class)->toBe(FatalError::class)
+        ->and(exceptionOccurrencesTable($db)->count())->toBe(1);
 });
 
 it('does not record exceptions reported while Spyglass is reporting its own failures', function () {
     SpyglassFacade::ignore(fn () => report(sameSiteException('Internal')));
     SpyglassFacade::flush();
 
-    expect(DB::table(ExceptionsModule::GROUPS)->count())->toBe(0);
+    expect(exceptionGroupsTable()->count())->toBe(0);
 
     // The application's own exception from the same site is not throttled by the internal one.
     reportAndFlush(sameSiteException());
@@ -553,7 +553,7 @@ it('does not record anything when storing exceptions fails', function () {
     SpyglassFacade::flush();
 
     expect($this->spyglassErrors)->toHaveCount(1)
-        ->and(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([RuntimeException::class])
+        ->and(exceptionGroupsTable()->pluck('class')->all())->toBe([RuntimeException::class])
         // The exception, the storage failure, and the failure reported by the listener: no loop.
         ->and($logged)->toBe(3);
     $this->spyglassErrors = [];
@@ -585,7 +585,7 @@ it('prunes groups resolved before their retention, unless they occurred again', 
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
-    expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
+    expect(exceptionGroupsTable()->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
 });
 
 it('stores the root cause of a wrapped exception, without query bindings', function () {
@@ -656,7 +656,7 @@ it('prunes old occurrences and groups last seen before their retention', functio
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
-    expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class])
+    expect(exceptionGroupsTable()->pluck('class')->all())->toBe([ExceptionsModuleTestException::class])
         ->and(exceptionOccurrences())->toHaveCount(1)
-        ->and(DB::table(Sources::TABLE)->where('kind', 'exception')->count())->toBe(1);
+        ->and(sourcesTable()->where('kind', 'exception')->count())->toBe(1);
 });

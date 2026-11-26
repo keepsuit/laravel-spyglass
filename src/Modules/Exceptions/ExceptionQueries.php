@@ -25,15 +25,16 @@ class ExceptionQueries
      */
     public function groups(array $filters = [], int $perPage = 25, int $page = 1): Paginator
     {
-        $groups = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
+        $groups = $this->groupsTable()
             ->when(($filters['status'] ?? null) === 'unresolved', fn (Builder $query) => $this->whereUnresolved($query))
             ->when(($filters['status'] ?? null) === 'resolved', fn (Builder $query) => $this->whereResolved($query))
             // `isset`, not truthiness: '0' is a valid class or scope filter.
             ->when(isset($filters['class']), fn (Builder $query) => $query->where('class', $filters['class'] ?? null))
             ->when(isset($filters['scope']), fn (Builder $query) => $query->whereExists(
                 fn (Builder $occurrences) => $occurrences->from(ExceptionsModule::OCCURRENCES)
-                    ->whereColumn(ExceptionsModule::OCCURRENCES.'.fingerprint', ExceptionsModule::GROUPS.'.fingerprint')
-                    ->where('scope', $filters['scope'] ?? null),
+                    ->where(ExceptionsModule::OCCURRENCES.'.kind', 'exception')
+                    ->where(ExceptionsModule::OCCURRENCES.'.scope', $filters['scope'] ?? null)
+                    ->whereColumn(ExceptionsModule::OCCURRENCES.'.signature', ExceptionsModule::GROUPS.'.signature'),
             ))
             ->orderByDesc('last_seen_at')
             ->orderByDesc('id')
@@ -51,7 +52,7 @@ class ExceptionQueries
      */
     public function group(string $fingerprint): ?object
     {
-        $group = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint)->first();
+        $group = $this->groupsTable()->where('signature', $fingerprint)->first();
 
         return $group === null ? null : $this->withStatus($group);
     }
@@ -74,8 +75,13 @@ class ExceptionQueries
     public function occurrences(string $fingerprint, int $perPage = 25, int $page = 1): Paginator
     {
         return $this->spyglass->connection()->table(ExceptionsModule::OCCURRENCES)
-            ->where('fingerprint', $fingerprint)
-            ->orderByDesc('occurred_at')
+            ->select([
+                'id', 'signature as fingerprint', 'recorded_at as occurred_at', 'message', 'body as trace', 'cause_class', 'cause_message',
+                'source_type', 'source', 'source_id', 'route', 'user_id', 'scope', 'context',
+            ])
+            ->where('kind', 'exception')
+            ->where('signature', $fingerprint)
+            ->orderByDesc('recorded_at')
             ->orderByDesc('id')
             ->simplePaginate($this->clamp($perPage), page: $page);
     }
@@ -85,14 +91,25 @@ class ExceptionQueries
      */
     public function resolve(string $fingerprint): bool
     {
-        return $this->whereUnresolved($this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint))
+        return $this->whereUnresolved($this->groupsTable()->where('signature', $fingerprint))
             ->update(['resolved_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]) > 0;
     }
 
     public function unresolve(string $fingerprint): bool
     {
-        return $this->whereResolved($this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint))
+        return $this->whereResolved($this->groupsTable()->where('signature', $fingerprint))
             ->update(['resolved_at' => null]) > 0;
+    }
+
+    /**
+     * The total row of each group: the others count its sources.
+     */
+    protected function groupsTable(): Builder
+    {
+        return $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
+            ->select(['id', 'signature as fingerprint', 'class', 'message', 'file', 'line', 'count', 'first_seen_at', 'last_seen_at', 'resolved_at'])
+            ->where('kind', 'exception')
+            ->where('source_type', '');
     }
 
     protected function whereUnresolved(Builder $query): Builder

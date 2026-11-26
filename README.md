@@ -65,10 +65,19 @@ You can install the package via composer:
 composer require keepsuit/laravel-spyglass
 ```
 
+Publish and run the migration, which creates all the Spyglass tables:
+
+```bash
+php artisan vendor:publish --tag="spyglass-migrations"
+php artisan migrate
+```
+
+The tables are created on the connection set by `SPYGLASS_DB_CONNECTION` (the default connection otherwise). In a multi-tenant application, keep the migration with the central migrations (for example `database/migrations`, not a tenant migrations path): Spyglass stores every tenant's entries in one place, filterable by scope.
+
 You can publish the config file with:
 
 ```bash
-php artisan vendor:publish --tag="laravel-spyglass-config"
+php artisan vendor:publish --tag="spyglass-config"
 ```
 
 ## Testing

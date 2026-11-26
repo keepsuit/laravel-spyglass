@@ -12,9 +12,12 @@ uses(WithLogsModule::class);
 function seedLogEntry(string $message, string $loggedAt, array $values = []): void
 {
     DB::table(LogsModule::ENTRIES)->insert([
+        'kind' => 'log',
+        'signature' => sha1($message),
         'level' => 'error',
         'message' => $message,
-        'logged_at' => $loggedAt,
+        // As stored: compared as strings on SQLite.
+        'recorded_at' => $loggedAt.'.000',
         ...$values,
     ]);
 }
@@ -40,6 +43,14 @@ it('lists entries newest first, with filters', function (array $filters, array $
     'to in another timezone' => [fn () => ['to' => Date::parse('2026-03-01 12:00:00', 'Europe/Rome')], ['b', 'a']],
     'combined' => [fn () => ['scope' => 'tenant:acme', 'level' => 'error', 'from' => Date::parse('2026-03-01 09:00:00', 'UTC')], ['c']],
 ]);
+
+it('takes in the whole second of both bounds', function () {
+    seedLogEntry('d', '2026-03-01 12:00:00', ['recorded_at' => '2026-03-01 12:00:00.500']);
+
+    $at = Date::parse('2026-03-01 12:00:00.250', 'UTC');
+
+    expect(collect(logQueries()->entries(['from' => $at, 'to' => $at])->items())->pluck('message')->sort()->values()->all())->toBe(['c', 'd']);
+});
 
 it('paginates and bounds every query', function () {
     Spyglass::connection()->enableQueryLog();

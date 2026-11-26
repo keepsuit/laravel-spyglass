@@ -13,7 +13,7 @@ use Monolog\Logger;
 
 class LogsModule extends Module
 {
-    public const string ENTRIES = 'spyglass_log_entries';
+    public const string ENTRIES = Sources::ENTRIES;
 
     public function boot(): void
     {
@@ -34,16 +34,9 @@ class LogsModule extends Module
     public function prunable(): array
     {
         return [
-            self::ENTRIES => ['column' => 'logged_at', 'retention' => 'entries'],
+            self::ENTRIES => ['column' => 'recorded_at', 'retention' => 'entries', 'kind' => 'log'],
+            Sources::GROUPS => ['column' => 'last_seen_at', 'retention' => 'entries', 'kind' => 'log'],
         ];
-    }
-
-    /**
-     * Sources of log messages last seen before the `entries` retention.
-     */
-    public function prune(): array
-    {
-        return [Sources::TABLE.' (logs)' => app(Sources::class)->prune('log', config('spyglass.modules.logs.retention.entries'))];
     }
 
     /**

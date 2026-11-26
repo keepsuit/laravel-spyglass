@@ -3,6 +3,7 @@
 namespace Keepsuit\Spyglass\Modules\Exceptions;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
@@ -11,19 +12,18 @@ use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Support\Sources;
+use Keepsuit\Spyglass\Support\Text;
 use PDOException;
 use Throwable;
 use WeakMap;
 
 class ExceptionsModule extends Module
 {
-    public const string GROUPS = 'spyglass_exception_groups';
+    public const string GROUPS = Sources::GROUPS;
 
-    public const string OCCURRENCES = 'spyglass_exception_occurrences';
+    public const string OCCURRENCES = Sources::ENTRIES;
 
     protected const int MAX_FRAMES = 50;
-
-    protected const int MAX_BYTES = 4096;
 
     /**
      * Static because `Spyglass::modules()` builds a new instance on every call.
@@ -100,13 +100,14 @@ class ExceptionsModule extends Module
                 return [
                     'fingerprint' => $fingerprint,
                     'source' => $source,
-                    'group' => ['class' => $this->truncate($e::class, 255), 'message' => $message, 'file' => $this->truncate($file), 'line' => $line],
+                    'group' => ['class' => Text::clip($e::class, 255), 'message' => $message, 'file' => Text::clip($file), 'line' => $line],
                     'now' => $now,
                     'occurrence' => $this->throttle->acquire('spyglass:exception:'.sha1($fingerprint.'|'.$source['scope'])) ? [
-                        'fingerprint' => $fingerprint,
-                        'occurred_at' => $now,
+                        'kind' => 'exception',
+                        'signature' => $fingerprint,
+                        'recorded_at' => $now,
                         'message' => $message,
-                        'trace' => json_encode($this->trace($e), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+                        'body' => json_encode($this->trace($e), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
                         ...$this->cause($e),
                         'user_id' => $this->userId(),
                         ...Arr::except($source, 'name'),
@@ -126,7 +127,7 @@ class ExceptionsModule extends Module
         // A group stays resolved until an occurrence newer than its resolution: see `ExceptionQueries`.
         Spyglass::upsert(
             self::GROUPS,
-            ['fingerprint' => $entry['fingerprint']],
+            ['kind' => 'exception', 'signature' => $entry['fingerprint'], 'source_type' => '', 'source_hash' => ''],
             values: $entry['group'],
             increment: ['count' => 1],
             max: ['last_seen_at' => $entry['now']],
@@ -155,12 +156,12 @@ class ExceptionsModule extends Module
 
         return $cause === null
             ? ['cause_class' => null, 'cause_message' => null]
-            : ['cause_class' => $this->truncate($cause::class, 255), 'cause_message' => $this->message($cause)];
+            : ['cause_class' => Text::clip($cause::class, 255), 'cause_message' => $this->message($cause)];
     }
 
     protected function message(Throwable $e): string
     {
-        return $this->truncate(self::safeMessage($e));
+        return Text::clip(self::safeMessage($e));
     }
 
     /**
@@ -193,7 +194,7 @@ class ExceptionsModule extends Module
         try {
             $id = Auth::id();
 
-            return $id === null ? null : (string) $id;
+            return $id === null ? null : Text::clip((string) $id, 191);
         } catch (Throwable) {
             return null;
         }
@@ -207,9 +208,9 @@ class ExceptionsModule extends Module
     protected function trace(Throwable $e): array
     {
         return array_map(fn (array $frame) => [
-            'file' => isset($frame['file']) ? $this->truncate($this->relative($frame['file']), 255) : null,
+            'file' => isset($frame['file']) ? Text::clip($this->relative($frame['file']), 255) : null,
             'line' => $frame['line'] ?? null,
-            'function' => $this->truncate(($frame['class'] ?? '').($frame['type'] ?? '').$frame['function'], 255),
+            'function' => Text::clip(($frame['class'] ?? '').($frame['type'] ?? '').$frame['function'], 255),
         ], array_slice($e->getTrace(), 0, self::MAX_FRAMES));
     }
 
@@ -221,50 +222,50 @@ class ExceptionsModule extends Module
         return str_starts_with($file, $base) ? substr($file, strlen($base)) : $file;
     }
 
-    /**
-     * Invalid UTF-8 and NUL bytes (anonymous class names have one) would make PostgreSQL reject the whole batch.
-     */
-    protected function truncate(string $value, int $bytes = self::MAX_BYTES): string
-    {
-        return mb_strcut(mb_scrub(str_replace("\0", '', $value), 'UTF-8'), 0, $bytes, 'UTF-8');
-    }
-
     public function prunable(): array
     {
         return [
-            self::OCCURRENCES => ['column' => 'occurred_at', 'retention' => 'occurrences'],
-            // Once its last occurrence is past retention, a group has none left to show.
-            self::GROUPS => ['column' => 'last_seen_at', 'retention' => 'occurrences'],
+            self::OCCURRENCES => ['column' => 'recorded_at', 'retention' => 'occurrences', 'kind' => 'exception'],
+            // Once its last occurrence is past retention, a group has none left to show, nor do its sources.
+            self::GROUPS => ['column' => 'last_seen_at', 'retention' => 'occurrences', 'kind' => 'exception'],
         ];
     }
 
     /**
-     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since, and sources
-     * last seen before the `occurrences` one, as their groups are.
+     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since, and their sources.
      */
     public function prune(): array
     {
-        $sources = [Sources::TABLE.' (exceptions)' => app(Sources::class)->prune('exception', config('spyglass.modules.exceptions.retention.occurrences'))];
         $days = config('spyglass.modules.exceptions.retention.resolved_groups');
 
         if (! is_numeric($days)) {
-            return $sources;
+            return [];
         }
 
-        $query = Spyglass::connection()->table(self::GROUPS)
-            ->where('resolved_at', '<', Date::now('UTC')->subDays((int) $days)->toDateTimeString())
-            ->whereColumn('last_seen_at', '<=', 'resolved_at')
-            ->limit(1000);
-
+        $resolvedBefore = Date::now('UTC')->subDays((int) $days)->toDateTimeString();
+        $resolved = fn (Builder $query) => $query->where('source_type', '')
+            ->where('resolved_at', '<', $resolvedBefore)
+            ->whereColumn('last_seen_at', '<=', 'resolved_at');
+        $groups = fn () => Spyglass::connection()->table(self::GROUPS)->where('kind', 'exception');
         $deleted = 0;
 
         do {
-            $fingerprints = $query->pluck('fingerprint')->all();
-            $deleted += $batch = $fingerprints === [] ? 0 : Spyglass::connection()->table(self::GROUPS)->whereIn('fingerprint', $fingerprints)->delete();
-            // A group recreated later must not inherit their counts.
-            $sources[Sources::TABLE.' (exceptions)'] += app(Sources::class)->forget('exception', $fingerprints);
-        } while ($batch === 1000);
+            // Under SQLite's 999 bound parameters, with the other bindings of the delete.
+            $fingerprints = $groups()->where($resolved)->limit(900)->pluck('signature')->all();
 
-        return [self::GROUPS => $deleted, ...$sources];
+            if ($fingerprints === []) {
+                break;
+            }
+
+            // Checked again: an occurrence stored since the read reopens its group.
+            $deleted += $groups()->whereIn('signature', $fingerprints)->where($resolved)->delete();
+            $gone = array_diff($fingerprints, $groups()->whereIn('signature', $fingerprints)->where('source_type', '')->pluck('signature')->all());
+
+            // A group recreated later must not inherit the counts of its sources.
+            // ponytail: a group reopened between these two statements loses its sources; lock per group if it matters.
+            $deleted += $gone === [] ? 0 : $groups()->whereIn('signature', $gone)->where('source_type', '!=', '')->delete();
+        } while (count($fingerprints) === 900);
+
+        return [self::GROUPS.' (exception, resolved)' => $deleted];
     }
 }

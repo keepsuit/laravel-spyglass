@@ -31,17 +31,8 @@ class SpyglassServiceProvider extends PackageServiceProvider
         $package
             ->name('laravel-spyglass')
             ->hasConfigFile()
-            ->hasMigrations([
-                'create_spyglass_schedule_runs_table',
-                'create_spyglass_queue_tables',
-            ])
+            ->hasMigration('create_spyglass_tables')
             ->hasCommand(PruneCommand::class);
-
-        $package->hasMigrations([
-            'create_spyglass_exceptions_tables',
-            'create_spyglass_logs_table',
-            'create_spyglass_sources_table',
-        ]);
     }
 
     public function packageRegistered(): void

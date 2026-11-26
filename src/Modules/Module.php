@@ -14,9 +14,9 @@ abstract class Module
 
     /**
      * Tables pruned by `spyglass:prune`: rows whose datetime column (stored in UTC) is older than
-     * `spyglass.modules.{module}.retention.{key}` days are deleted.
+     * `spyglass.modules.{module}.retention.{key}` days are deleted, only those of `kind` in a shared table.
      *
-     * @return array<string, array{column: string, retention: string}>
+     * @return array<string, array{column: string, retention: string, kind?: string}>
      */
     public function prunable(): array
     {

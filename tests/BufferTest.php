@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Cache\ArrayStore;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -176,6 +177,44 @@ it('stores the other tables when one of them fails', function () {
 
     expect(array_column(entries(), 'name'))->toBe(['b'])
         ->and(DB::table('spyglass_test_counters')->count())->toBe(1)
+        ->and($this->spyglassErrors)->toHaveCount(1);
+    $this->spyglassErrors = [];
+});
+
+it('stores the other rows of a table when one statement fails', function () {
+    Spyglass::insert('spyglass_test_entries', ['name' => 'rejected', 'missing_column' => 1]);
+    Spyglass::insert('spyglass_test_entries', ['name' => 'kept']);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'rejected'], values: ['missing_column' => 1]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'kept'], increment: ['count' => 1]);
+    Spyglass::flush();
+
+    expect(array_column(entries(), 'name'))->toBe(['kept'])
+        ->and(DB::table('spyglass_test_counters')->pluck('name')->all())->toBe(['kept'])
+        ->and($this->spyglassErrors)->toHaveCount(1);
+    $this->spyglassErrors = [];
+});
+
+it('stops the flush when the storage connection is lost', function () {
+    $attempts = 0;
+    $lost = true;
+    Spyglass::connection()->beforeExecuting(function () use (&$attempts, &$lost) {
+        if (! $lost) {
+            return;
+        }
+
+        $attempts++;
+
+        throw new QueryException(Spyglass::connection()->getName(), 'insert', [], new PDOException('server has gone away'));
+    });
+
+    Spyglass::insert('spyglass_test_entries', ['name' => 'a']);
+    Spyglass::insert('spyglass_test_entries', ['name' => 'b', 'scope' => null, 'context' => null, 'created_at' => null]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'c'], increment: ['count' => 1]);
+    Spyglass::flush();
+
+    $lost = false;
+
+    expect($attempts)->toBe(1)
         ->and($this->spyglassErrors)->toHaveCount(1);
     $this->spyglassErrors = [];
 });

@@ -6,6 +6,8 @@ use Closure;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DetectsConcurrencyErrors;
+use Illuminate\Database\DetectsLostConnections;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -18,11 +20,14 @@ use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
+use Keepsuit\Spyglass\Support\Text;
 use RuntimeException;
 use Throwable;
 
 class Spyglass
 {
+    use DetectsConcurrencyErrors, DetectsLostConnections;
+
     /**
      * Module classes keyed by their `spyglass.modules` config key.
      *
@@ -46,6 +51,9 @@ class Spyglass
     protected int $buffered = 0;
 
     protected bool $ignoring = false;
+
+    /** Set when the storage stops answering, so the rest of the flush does not wait on it statement by statement. */
+    protected bool $unavailable = false;
 
     protected ?int $reportedAt = null;
 
@@ -134,8 +142,12 @@ class Spyglass
                 $keys = config('spyglass.context.keys', []);
                 $context = $keys === [] ? [] : Context::only($keys);
 
+                $scope = $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null;
+
+                $scope = $scope === null ? null : Text::clip($scope, 191);
+
                 return [
-                    'scope' => $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null,
+                    'scope' => $scope === '' ? null : $scope,
                     'context' => $context === [] ? null : (json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: null),
                 ];
             } catch (Throwable $e) {
@@ -225,6 +237,8 @@ class Spyglass
         $this->inserts = $this->upserts = [];
         $this->buffered = 0;
 
+        $this->unavailable = false;
+
         $this->ignore(function () use ($inserts, $upserts) {
             try {
                 $db = $this->connection();
@@ -237,19 +251,11 @@ class Spyglass
             }
 
             foreach ($inserts as $table => $rows) {
-                try {
-                    $this->storeInserts($db, $table, $rows);
-                } catch (Throwable $e) {
-                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
-                }
+                $this->storeInserts($db, $table, $rows);
             }
 
             foreach ($upserts as $table => $pending) {
-                try {
-                    $this->storeUpserts($db, $table, $pending);
-                } catch (Throwable $e) {
-                    $this->report("Spyglass failed to store entries in [{$table}]", $e);
-                }
+                $this->storeUpserts($db, $table, $pending);
             }
         });
     }
@@ -340,7 +346,7 @@ class Spyglass
     {
         foreach ($this->groupByColumns($rows) as $group) {
             foreach (array_chunk($group, $this->chunkSize($group[0])) as $chunk) {
-                $db->table($table)->insert($chunk);
+                $this->storeChunk($table, fn () => $db->table($table)->insert($chunk));
             }
         }
     }
@@ -366,26 +372,51 @@ class Spyglass
         }
 
         foreach ($groups as $group) {
-            $first = $group[0];
-            $update = array_keys($first['values']);
+            $this->storeChunk($table, fn () => $this->storeUpsertGroup($db, $table, $group));
+        }
+    }
 
-            foreach (array_keys($first['increment']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
-            }
+    /**
+     * @param  non-empty-list<array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>, min: array<string, mixed>}>  $group
+     */
+    protected function storeUpsertGroup(Connection $db, string $table, array $group): void
+    {
+        $first = $group[0];
+        $update = array_keys($first['values']);
 
-            foreach (array_keys($first['max']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
-            }
+        foreach (array_keys($first['increment']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'increment');
+        }
 
-            foreach (array_keys($first['min']) as $column) {
-                $update[$column] = $this->upsertExpression($db, $table, $column, 'min');
-            }
+        foreach (array_keys($first['max']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
+        }
 
-            $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'] + $entry['min'], $group);
+        foreach (array_keys($first['min']) as $column) {
+            $update[$column] = $this->upsertExpression($db, $table, $column, 'min');
+        }
 
-            foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
-                $db->table($table)->upsert($chunk, array_keys($first['key']), $update);
-            }
+        $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'] + $entry['min'], $group);
+
+        foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
+            $this->storeChunk($table, fn () => $db->table($table)->upsert($chunk, array_keys($first['key']), $update));
+        }
+    }
+
+    /**
+     * One rejected statement, such as a row PostgreSQL refuses, must not drop the other rows of its table.
+     */
+    protected function storeChunk(string $table, Closure $store): void
+    {
+        if ($this->unavailable) {
+            return;
+        }
+
+        try {
+            $store();
+        } catch (Throwable $e) {
+            $this->unavailable = $this->causedByLostConnection($e) || $this->causedByConcurrencyError($e);
+            $this->report("Spyglass failed to store entries in [{$table}]", $e);
         }
     }
 

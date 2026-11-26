@@ -28,12 +28,14 @@ use WeakMap;
  */
 final class Sources
 {
-    public const string TABLE = 'spyglass_sources';
+    /** Exception occurrences and log entries. */
+    public const string ENTRIES = 'spyglass_entries';
+
+    /** A total row per exception group (`source_type` ''), and a row per source of an exception group or log message. */
+    public const string GROUPS = 'spyglass_groups';
 
     /** Hidden Context key carrying the source of a scheduled task to its background process. */
     public const string CONTEXT_SOURCE = 'spyglass_source';
-
-    private const int MAX_BYTES = 4096;
 
     /**
      * The job being processed by a worker, with the Context captured before tenancy can revert it.
@@ -124,7 +126,13 @@ final class Sources
     {
         $source = $this->resolve($exception);
 
-        return [...$source, 'name' => $source['name'] ?? (string) $source['source']];
+        return [
+            ...$source,
+            'source' => $source['source'] === null ? null : Text::clip($source['source']),
+            'source_id' => $source['source_id'] === null ? null : Text::clip($source['source_id'], 64),
+            'route' => $source['route'] === null ? null : Text::clip($source['route'], 255),
+            'name' => $source['name'] ?? (string) $source['source'],
+        ];
     }
 
     /**
@@ -159,11 +167,11 @@ final class Sources
         }
 
         // Not cut at `?`: optional route parameters contain one.
-        $name = $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/'));
+        $name = Text::clip($request->getMethod().' /'.ltrim($route->uri(), '/'));
 
         return [
             'source_type' => 'request',
-            'source' => $this->truncate($name.$this->maskedQuery($request)),
+            'source' => Text::clip($name.$this->maskedQuery($request)),
             'source_id' => null,
             'route' => $route->getName(),
             'name' => $name,
@@ -194,51 +202,15 @@ final class Sources
     public function count(string $kind, string $signature, array $source): void
     {
         // Keyed by digest: a prefix that fits the index would merge long routes.
-        Spyglass::upsert(self::TABLE, [
+        Spyglass::upsert(self::GROUPS, [
             'kind' => $kind,
             'signature' => $signature,
             'source_type' => $source['source_type'],
             'source_hash' => sha1($source['name']),
         ], values: [
             // Scrubbed: PostgreSQL rejects invalid UTF-8 and NUL bytes, and with them the whole batch.
-            'source' => $this->truncate($source['name']),
+            'source' => Text::clip($source['name']),
         ], increment: ['count' => 1], max: ['last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]);
-    }
-
-    /**
-     * Rows of `$kind` for these signatures, whose groups are gone.
-     *
-     * @param  'exception'|'log'  $kind
-     * @param  array<array-key, string>  $signatures
-     */
-    public function forget(string $kind, array $signatures): int
-    {
-        return $signatures === [] ? 0 : Spyglass::connection()->table(self::TABLE)->where('kind', $kind)->whereIn('signature', $signatures)->delete();
-    }
-
-    /**
-     * Rows of `$kind` last seen before `$days` days ago.
-     *
-     * @param  'exception'|'log'  $kind
-     */
-    public function prune(string $kind, mixed $days): int
-    {
-        if (! is_numeric($days)) {
-            return 0;
-        }
-
-        $query = Spyglass::connection()->table(self::TABLE)
-            ->where('kind', $kind)
-            ->where('last_seen_at', '<', Date::now('UTC')->subDays((int) $days)->format('Y-m-d H:i:s.v'))
-            ->limit(1000);
-        $deleted = 0;
-
-        // Short batches keep locks and the transaction log small on large tables.
-        do {
-            $deleted += $batch = $query->delete();
-        } while ($batch === 1000);
-
-        return $deleted;
     }
 
     /**
@@ -249,9 +221,10 @@ final class Sources
      */
     public function of(string $kind, string $signature, int $limit = 100): array
     {
-        return Spyglass::connection()->table(self::TABLE)
+        return Spyglass::connection()->table(self::GROUPS)
             ->where('kind', $kind)
             ->where('signature', $signature)
+            ->where('source_type', '!=', '')
             ->orderByDesc('count')
             ->orderBy('source')
             ->limit(max(1, min($limit, 1000)))
@@ -279,10 +252,5 @@ final class Sources
                 return in_array(Str::before(urldecode($key), '['), $allowed, true) ? $pair : "{$key}=***";
             })
             ->implode('&');
-    }
-
-    private function truncate(string $value): string
-    {
-        return mb_strcut(mb_scrub(str_replace("\0", '', $value), 'UTF-8'), 0, self::MAX_BYTES, 'UTF-8');
     }
 }
