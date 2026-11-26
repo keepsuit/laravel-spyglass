@@ -58,7 +58,7 @@ return [
                 'aggregates' => 7,
                 'failed_jobs' => 30,
             ],
-            // Split aggregates by scope. Multiplies their rows by the number of scopes.
+            // Also keep aggregates per scope, next to the totals. Adds a row per active scope.
             'aggregate_by_scope' => false,
         ],
 

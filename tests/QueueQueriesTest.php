@@ -136,6 +136,18 @@ it('filters by connection, since queue names repeat across connections', functio
         ->and(collect(queueQueries()->failedJobs($filters)->items())->pluck('uuid')->all())->toBe(['uuid-1']);
 });
 
+it('reads totals unless a scope is given, never adding scoped rows to them', function () {
+    queueAggregate('2026-01-01 10:00:00', 'default', 'A', ['processed' => 3]);
+    DB::table(QueueModule::AGGREGATES)->insert(['bucket' => '2026-01-01 10:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'scope' => 'tenant:acme', 'processed' => 2]);
+
+    $from = now()->parse('2026-01-01 10:00');
+    $to = now()->parse('2026-01-01 11:00');
+
+    expect(queueQueries()->totals($from, $to)->pluck('processed')->all())->toBe([3])
+        ->and(queueQueries()->series($from, $to)->pluck('processed')->all())->toBe([3])
+        ->and(queueQueries()->totals($from, $to, filters: ['scope' => 'tenant:acme'])->pluck('processed')->all())->toBe([2]);
+});
+
 it('clamps limits to at least one row', function () {
     queueAggregate('2026-01-01 10:00:00', 'default', 'A', ['processed' => 1]);
     queueAggregate('2026-01-01 10:00:00', 'emails', 'A', ['processed' => 2]);

@@ -21,7 +21,7 @@ return new class extends Migration
             $table->string('connection', 64);
             $table->string('queue', 191);
             $table->string('job', 255);
-            // Empty instead of NULL: NULLs never match in a unique index, so upserts would duplicate rows.
+            // '' is the total of every scope. Empty instead of NULL: NULLs never match in a unique index.
             $table->string('scope', 191)->default('');
             $table->unsignedInteger('queued')->default(0);
             $table->unsignedInteger('processed')->default(0);
@@ -32,6 +32,7 @@ return new class extends Migration
             $table->unsignedInteger('duration_max')->default(0);
 
             $table->unique(['bucket', 'connection', 'queue', 'job', 'scope'], 'spyglass_queue_aggregates_key');
+            $table->index(['scope', 'bucket']);
         });
 
         Schema::create('spyglass_queue_failed_jobs', function (Blueprint $table) {

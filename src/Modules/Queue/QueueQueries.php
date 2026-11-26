@@ -105,6 +105,7 @@ class QueueQueries
             'spyglass:queue:sizes:'.intdiv($since->getTimestamp(), 300),
             5,
             fn () => $this->spyglass->connection()->table(QueueModule::AGGREGATES)
+                ->where('scope', '')
                 ->where('bucket', '>=', $this->utc($since))
                 ->distinct()
                 ->orderBy('connection')
@@ -196,7 +197,8 @@ class QueueQueries
             ->selectRaw('sum(queued) as queued, sum(processed) as processed, sum(failed) as failed, sum(released) as released, '
                 .'sum(timed_out) as timed_out, sum(duration_sum) as duration_sum, max(duration_max) as duration_max')
             ->whereBetween('bucket', [$this->utc($from), $this->utc($to)])
-            ->where($this->filters($filters))
+            // Unfiltered reads take the total rows: summing scoped rows too would count jobs twice.
+            ->where($this->filters($filters + ['scope' => '']))
             ->groupBy($groups);
     }
 

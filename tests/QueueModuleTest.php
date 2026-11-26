@@ -301,7 +301,7 @@ it('keeps the scope captured when the job started after the context is cleared',
         ->and(json_decode(queueFailedRows()[0]['context'], true))->toBe(['tenant' => 'acme']);
 });
 
-it('splits aggregates by scope when enabled', function () {
+it('keeps aggregates per scope next to the totals when enabled', function () {
     config()->set([
         'spyglass.modules.queue.aggregate_by_scope' => true,
         'spyglass.context.keys' => ['tenant'],
@@ -318,7 +318,7 @@ it('splits aggregates by scope when enabled', function () {
 
     expect(DB::table(QueueModule::AGGREGATES)->orderBy('scope')->get(['scope', 'queued', 'processed'])->map(fn ($row) => (array) $row)->all())
         ->toBe([
-            ['scope' => '', 'queued' => 1, 'processed' => 1],
+            ['scope' => '', 'queued' => 2, 'processed' => 2],
             ['scope' => 'tenant:acme', 'queued' => 1, 'processed' => 1],
         ]);
 });

@@ -275,15 +275,20 @@ class QueueModule extends Module
         $now = now()->utc();
 
         // Every counter on every row: one column shape, so one statement per flush.
-        $counters = ['queued' => 0, 'processed' => 0, 'failed' => 0, 'released' => 0, 'timed_out' => 0];
-
-        Spyglass::upsert(self::AGGREGATES, [
+        $increment = [$counter => 1, 'duration_sum' => $duration ?? 0] + ['queued' => 0, 'processed' => 0, 'failed' => 0, 'released' => 0, 'timed_out' => 0];
+        $key = [
             // A string, so keys of the same bucket merge in the buffer.
             'bucket' => $now->setTimestamp(intdiv($now->getTimestamp(), 300) * 300)->toDateTimeString(),
             'connection' => mb_substr($connection, 0, 64),
             'queue' => mb_substr($queue, 0, 191),
             'job' => mb_substr($job, 0, 255),
-            'scope' => config('spyglass.modules.queue.aggregate_by_scope') ? mb_substr($scope ?? '', 0, 191) : '',
-        ], increment: [$counter => 1, 'duration_sum' => $duration ?? 0] + $counters, max: ['duration_max' => $duration ?? 0]);
+        ];
+
+        // The unscoped row is the total of every scope, so unfiltered reads never sum scoped rows.
+        Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => ''], increment: $increment, max: ['duration_max' => $duration ?? 0]);
+
+        if ($scope !== null && $scope !== '' && config('spyglass.modules.queue.aggregate_by_scope')) {
+            Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => mb_substr($scope, 0, 191)], increment: $increment, max: ['duration_max' => $duration ?? 0]);
+        }
     }
 }
