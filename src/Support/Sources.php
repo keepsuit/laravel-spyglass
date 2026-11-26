@@ -51,7 +51,7 @@ final class Sources
         // Sync jobs run inside the dispatching request or command, which is their source.
         Event::listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
-                $this->job = ['source' => $event->job->resolveName(), ...Spyglass::captureContext()];
+                $this->job = ['source' => JobName::from($event->job->payload()), ...Spyglass::captureContext()];
             }
         });
         Event::listen(JobExceptionOccurred::class, function (JobExceptionOccurred $event) {

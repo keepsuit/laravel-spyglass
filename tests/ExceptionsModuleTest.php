@@ -22,6 +22,7 @@ use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Tests\Fixtures\ConcurrentException;
 use Keepsuit\Spyglass\Tests\Fixtures\ForwardingExceptionHandler;
+use Keepsuit\Spyglass\Tests\Fixtures\QueueJob;
 use Keepsuit\Spyglass\Tests\Fixtures\TestJob;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsModule;
 use NunoMaduro\Collision\Adapters\Laravel\ExceptionHandler as CollisionHandler;
@@ -466,6 +467,15 @@ it('stores the current scope of a job that reports after switching tenant', func
     SpyglassFacade::flush();
 
     expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'scope' => 'tenant:other']);
+});
+
+it('names the job after its class, not a display name that can embed ids', function () {
+    QueueJob::dispatch('throw', 'Order #12');
+
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'source' => QueueJob::class]);
 });
 
 it('stores the console command name, without its arguments', function () {
