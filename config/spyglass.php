@@ -94,6 +94,15 @@ return [
 
         'health' => [
             'enabled' => true,
+            // Deployed version (a git tag or commit), hidden when empty. The keepsuit/laravel chart sets APP_VERSION.
+            'version' => env('APP_VERSION'),
+            // Composer packages whose installed version is shown, keyed by label.
+            'versions' => [
+                'Spyglass' => 'keepsuit/laravel-spyglass',
+            ],
+            // Database connections and cache stores checked. Null: the application default and the one Spyglass uses.
+            'connections' => null,
+            'cache_stores' => null,
         ],
     ],
 
