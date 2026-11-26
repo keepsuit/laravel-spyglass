@@ -78,6 +78,8 @@ final class Sources
         Event::listen(JobAttempted::class, function (JobAttempted $event) {
             if (! $event->job instanceof SyncJob) {
                 $this->job = null;
+                // Restored from the job's payload: a job dispatched by a task process carries the task.
+                Context::forgetHidden(self::CONTEXT_SOURCE);
             }
         });
     }
@@ -88,6 +90,16 @@ final class Sources
     public function enterTask(string $label, string $id): void
     {
         $this->task = ['source_type' => 'schedule', 'source' => $label, 'source_id' => $id, ...Spyglass::captureContext()];
+    }
+
+    /**
+     * The current task run was not one, such as an overlap skip: entries keep the task, not the run.
+     */
+    public function forgetRun(): void
+    {
+        if ($this->task !== null) {
+            $this->task['source_id'] = null;
+        }
     }
 
     /**
@@ -104,10 +116,21 @@ final class Sources
 
     /**
      * The source of an entry recorded now, or of `$exception` when it is reported after its job or task ended.
+     * `name` is the source without what varies between its entries, such as a query string: to group by.
      *
-     * @return array{source_type: string, source: ?string, source_id: ?string, route: ?string, scope: ?string, context: ?string}
+     * @return array{source_type: string, source: ?string, source_id: ?string, route: ?string, scope: ?string, context: ?string, name: string}
      */
     public function current(?Throwable $exception = null): array
+    {
+        $source = $this->resolve($exception);
+
+        return [...$source, 'name' => $source['name'] ?? (string) $source['source']];
+    }
+
+    /**
+     * @return array{source_type: string, source: ?string, source_id: ?string, route: ?string, scope: ?string, context: ?string, name?: string}
+     */
+    private function resolve(?Throwable $exception): array
     {
         // In memory before the hidden Context, which also travels into the jobs a background task dispatches.
         $source = ($exception === null ? null : $this->thrown[$exception] ?? null) ?? $this->job ?? $this->task ?? $this->background();
@@ -135,11 +158,15 @@ final class Sources
             return ['source_type' => 'request', 'source' => $request->getMethod().' (unrouted)', 'source_id' => null, 'route' => null, ...Spyglass::captureContext()];
         }
 
+        // Not cut at `?`: optional route parameters contain one.
+        $name = $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/'));
+
         return [
             'source_type' => 'request',
-            'source' => $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/').$this->maskedQuery($request)),
+            'source' => $this->truncate($name.$this->maskedQuery($request)),
             'source_id' => null,
             'route' => $route->getName(),
+            'name' => $name,
             ...Spyglass::captureContext(),
         ];
     }
@@ -162,17 +189,31 @@ final class Sources
      * Count `$source` for the exception group or log message `$signature`: the origins of each, exactly.
      *
      * @param  'exception'|'log'  $kind
-     * @param  array{source_type: string, source: ?string}  $source
+     * @param  array{source_type: string, name: string}  $source
      */
     public function count(string $kind, string $signature, array $source): void
     {
+        // Keyed by digest: a prefix that fits the index would merge long routes.
         Spyglass::upsert(self::TABLE, [
             'kind' => $kind,
             'signature' => $signature,
             'source_type' => $source['source_type'],
+            'source_hash' => sha1($source['name']),
+        ], values: [
             // Scrubbed: PostgreSQL rejects invalid UTF-8 and NUL bytes, and with them the whole batch.
-            'source' => mb_substr($this->truncate(self::name($source)), 0, 191),
+            'source' => $this->truncate($source['name']),
         ], increment: ['count' => 1], max: ['last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]);
+    }
+
+    /**
+     * Rows of `$kind` for these signatures, whose groups are gone.
+     *
+     * @param  'exception'|'log'  $kind
+     * @param  array<array-key, string>  $signatures
+     */
+    public function forget(string $kind, array $signatures): int
+    {
+        return $signatures === [] ? 0 : Spyglass::connection()->table(self::TABLE)->where('kind', $kind)->whereIn('signature', $signatures)->delete();
     }
 
     /**
@@ -216,16 +257,6 @@ final class Sources
             ->limit(max(1, min($limit, 1000)))
             ->get(['source_type', 'source', 'count', 'last_seen_at'])
             ->all();
-    }
-
-    /**
-     * The source without what varies between its entries, such as the query string of a request: to group by.
-     *
-     * @param  array{source_type: string, source: ?string}  $source
-     */
-    public static function name(array $source): string
-    {
-        return $source['source_type'] === 'request' ? Str::before((string) $source['source'], '?') : (string) $source['source'];
     }
 
     /**

@@ -131,6 +131,8 @@ class ScheduleModule extends Module
             if (data_get($task, 'skippedBecauseOverlapping', false) || ($task->exitCode === null && ! $task->runInBackground)) {
                 // Laravel fires `ScheduledTaskFailed` next when a stale exit code is not 0: it must not reopen the run.
                 $this->runs[$id]['closed'] = true;
+                // Laravel may still throw on the stale exit code: that exception has no run.
+                app(Sources::class)->forgetRun();
 
                 if (! $this->runs[$id]['quiet']) {
                     $this->deleteRun($id);

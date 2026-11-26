@@ -21,13 +21,13 @@ return new class extends Migration
             // The exception fingerprint, or the digest of a log level and message.
             $table->char('signature', 40);
             $table->string('source_type', 16);
-            // Lengths keep the unique index under MySQL's 3072-byte limit with utf8mb4. Empty instead of NULL:
-            // NULLs never match in a unique index, so upserts would duplicate rows.
-            $table->string('source', 191)->default('');
+            // The key, as `source` can be longer than an index allows.
+            $table->char('source_hash', 40);
+            $table->text('source');
             $table->unsignedBigInteger('count')->default(0);
             $table->dateTime('last_seen_at', 3)->index();
 
-            $table->unique(['kind', 'signature', 'source_type', 'source'], 'spyglass_sources_key');
+            $table->unique(['kind', 'signature', 'source_type', 'source_hash'], 'spyglass_sources_key');
         });
     }
 

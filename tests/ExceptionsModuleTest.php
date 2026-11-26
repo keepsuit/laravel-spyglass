@@ -604,6 +604,34 @@ it('stores the root cause of a wrapped exception, without query bindings', funct
     ]);
 });
 
+it('keeps the driver message of a PDO error out, whether wrapped, wrapping or copied', function () {
+    $driver = new PDOException("SQLSTATE[23000]: Duplicate entry 'mario@example.com' for key 'email'", 23000);
+    $query = new QueryException('testing', 'insert into users (email) values (?)', ['mario@example.com'], $driver);
+
+    reportAndFlush(new RuntimeException('Import failed', previous: $driver));
+    reportAndFlush($driver);
+    reportAndFlush(new LogicException('Rendering failed: '.$query->getMessage(), previous: $query));
+
+    foreach (exceptionOccurrences() as $occurrence) {
+        expect($occurrence['message'].' '.$occurrence['cause_message'])->not->toContain('mario@example.com');
+    }
+
+    expect(array_column(exceptionOccurrences(), 'cause_message'))->toContain('SQLSTATE[23000]');
+});
+
+it('removes the sources of the resolved groups it prunes', function () {
+    config()->set('spyglass.modules.exceptions.retention.resolved_groups', 1);
+    $fingerprint = ExceptionFingerprint::for(sameSiteException());
+
+    reportAndFlush(sameSiteException());
+    app(ExceptionQueries::class)->resolve($fingerprint);
+
+    $this->travel(2)->days();
+    $this->artisan('spyglass:prune')->assertSuccessful();
+
+    expect(app(ExceptionQueries::class)->sources($fingerprint))->toBe([]);
+});
+
 it('counts every source of a group, beyond the throttled occurrences', function () {
     Route::get('/checkout', fn () => throw sameSiteException());
     Route::get('/orders/{order}', fn () => throw sameSiteException());

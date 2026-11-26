@@ -296,6 +296,47 @@ it('counts every source of a message, beyond the throttled entries', function ()
         ->toBe([['request', 'GET /checkout', 4], ['command', (string) (new ArgvInput)->getFirstArgument(), 1]]);
 });
 
+it('keeps routes with optional parameters apart', function () {
+    Route::get('{locale?}/orders', fn () => Log::warning('Gateway slow'));
+    Route::get('{locale?}/users', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/it/orders');
+    $this->get('/it/users');
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'source'))->toBe(['GET /{locale?}/orders', 'GET /{locale?}/users'])
+        ->and(collect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->pluck('source')->sort()->values()->all())
+        ->toBe(['GET /{locale?}/orders', 'GET /{locale?}/users']);
+});
+
+it('keeps long routes with the same beginning apart', function () {
+    $prefix = str_repeat('segment/', 30);
+    Route::get($prefix.'orders', fn () => Log::warning('Gateway slow'));
+    Route::get($prefix.'users', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/'.$prefix.'orders');
+    $this->get('/'.$prefix.'users');
+    SpyglassFacade::flush();
+
+    expect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->toHaveCount(2);
+});
+
+it('keeps counting messages already seen beyond the entry cap', function () {
+    Log::warning('Message 0');
+
+    foreach (range(1, 120) as $i) {
+        Log::warning("Message {$i}");
+    }
+
+    Log::warning('Message 0');
+    Log::warning('Message 120');
+    SpyglassFacade::flush();
+
+    expect((int) app(LogQueries::class)->sources('warning', 'Message 0')[0]->count)->toBe(2)
+        ->and(app(LogQueries::class)->sources('warning', 'Message 120'))->toBe([])
+        ->and(logEntries())->toHaveCount(100);
+});
+
 it('prunes entries older than the retention', function () {
     $this->travelTo(now()->subDays(8));
     Log::error('Old');

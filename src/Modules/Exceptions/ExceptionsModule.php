@@ -4,12 +4,14 @@ namespace Keepsuit\Spyglass\Modules\Exceptions;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Support\Sources;
+use PDOException;
 use Throwable;
 use WeakMap;
 
@@ -107,7 +109,7 @@ class ExceptionsModule extends Module
                         'trace' => json_encode($this->trace($e), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
                         ...$this->cause($e),
                         'user_id' => $this->userId(),
-                        ...$source,
+                        ...Arr::except($source, 'name'),
                     ] : null,
                 ];
             } catch (Throwable $failure) {
@@ -166,7 +168,24 @@ class ExceptionsModule extends Module
      */
     public static function safeMessage(Throwable $e): string
     {
-        return $e instanceof QueryException ? "SQLSTATE[{$e->getCode()}]: {$e->getSql()}" : $e->getMessage();
+        if ($e instanceof QueryException) {
+            return "SQLSTATE[{$e->getCode()}]: {$e->getSql()}";
+        }
+
+        if ($e instanceof PDOException) {
+            return "SQLSTATE[{$e->getCode()}]";
+        }
+
+        $message = $e->getMessage();
+
+        // Wrappers such as `ViewException` copy the message of the database error they wrap.
+        for ($previous = $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50; $previous = $previous->getPrevious(), $depth++) {
+            if (($previous instanceof QueryException || $previous instanceof PDOException) && $previous->getMessage() !== '') {
+                $message = str_replace($previous->getMessage(), self::safeMessage($previous), $message);
+            }
+        }
+
+        return $message;
     }
 
     protected function userId(): ?string
@@ -240,7 +259,10 @@ class ExceptionsModule extends Module
         $deleted = 0;
 
         do {
-            $deleted += $batch = $query->delete();
+            $fingerprints = $query->pluck('fingerprint')->all();
+            $deleted += $batch = $fingerprints === [] ? 0 : Spyglass::connection()->table(self::GROUPS)->whereIn('fingerprint', $fingerprints)->delete();
+            // A group recreated later must not inherit their counts.
+            $sources[Sources::TABLE.' (exceptions)'] += app(Sources::class)->forget('exception', $fingerprints);
         } while ($batch === 1000);
 
         return [self::GROUPS => $deleted, ...$sources];
