@@ -49,7 +49,15 @@ return [
             'enabled' => true,
             'retention' => [
                 'runs' => 30,
+                // Runs kept per task, newest first, within the days above. Not successful: failed or interrupted.
+                'successful_runs_per_task' => 10,
+                'failed_runs_per_task' => 100,
             ],
+            // Seconds after a due time before a task without a run or a skip is reported as missed.
+            // Keep it above 60: skips of sub-minute tasks are written at most every 30 seconds.
+            'missed_after' => 90,
+            // Seconds after which a run that never reported an outcome is shown as interrupted.
+            'interrupted_after' => 86400,
         ],
 
         'queue' => [

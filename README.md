@@ -27,6 +27,17 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 
 ## Known limitations
 
+- On Laravel 12, a background run skipped for overlap mid-execution shows as interrupted.
+- On Laravel 12, a sub-minute task skipped for overlap right after a failed execution can be recorded as failed.
+- On Laravel 12, a task skipped by `onOneServer` on the losing host emits no skip event.
+- Concurrent runs appending to the same output file can capture each other's output.
+- During a rolling deploy, a host still running the old code can republish the previous cron expression until it stops.
+- Sub-minute slots are computed as aligned to the start of the minute.
+- Successful runs of sub-minute tasks are not stored as runs, only the last one on the task: a crash during one shows as a missed run, not as an interrupted one.
+- A background task whose `after()` callback throws is never closed by `schedule:finish`, so its run shows as interrupted.
+- A task left out because the application was down is reported as missed when a task of the same tick brings the application back up.
+- Identical tasks sharing a mutex but writing to different output files can store each other's output.
+- The task list shows at most 1000 tasks.
 - `Bus::batch()` on the `database` queue driver does not fire `JobQueued`, so the `queued` counter undercounts batched jobs there.
 - On SQLite, a worker timeout inside an open database transaction loses the counters of that attempt.
 - A worker started directly on the target of a queue forward (`Queue::forward('a', 'b')`, worker on `b`) counts the attempts under `b`, while `queued` is counted under `a`.
@@ -34,7 +45,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 ## Requirements
 
 - PHP 8.3+
-- Laravel 12.25+ or 13
+- Laravel 12.41+ or 13
 - MySQL/MariaDB, PostgreSQL or SQLite (SQL Server is not supported)
 
 ## Installation

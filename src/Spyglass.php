@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
+use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use RuntimeException;
 use Throwable;
 
@@ -28,6 +29,7 @@ class Spyglass
      * @var array<string, class-string<Module>>
      */
     public static array $modules = [
+        'schedule' => ScheduleModule::class,
         'queue' => QueueModule::class,
     ];
 
