@@ -3,6 +3,30 @@
 use Illuminate\Support\Facades\DB;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 
+class FingerprintTarget
+{
+    public function sync(bool $early): never
+    {
+        if ($early) {
+            throw new RuntimeException('early');
+        }
+
+        throw new RuntimeException('late');
+    }
+
+    public function import(): never
+    {
+        throw new RuntimeException('import');
+    }
+}
+
+it('groups by the function that threw, so moving the throw site keeps the group', function () {
+    $sync = fn (bool $early) => thrown(fn () => (new FingerprintTarget)->sync($early));
+
+    expect(ExceptionFingerprint::for($sync(true)))->toBe(ExceptionFingerprint::for($sync(false)))
+        ->and(ExceptionFingerprint::for($sync(true)))->not->toBe(ExceptionFingerprint::for(thrown(fn () => (new FingerprintTarget)->import())));
+});
+
 it('groups by class and throw site, ignoring the message', function () {
     $make = fn (string $message) => new RuntimeException($message);
 
