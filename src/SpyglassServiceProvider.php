@@ -8,6 +8,7 @@ use Illuminate\Console\Events\ScheduledTaskSkipped;
 use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Access\Gate;
+use Illuminate\Log\LogManager;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\Looping;
@@ -17,6 +18,8 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Commands\PruneCommand;
 use Keepsuit\Spyglass\Http\Middleware\Authorize;
+use Monolog\Handler\NullHandler;
+use Monolog\Logger;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
 
@@ -32,6 +35,11 @@ class SpyglassServiceProvider extends PackageServiceProvider
                 'create_spyglass_queue_tables',
             ])
             ->hasCommand(PruneCommand::class);
+
+        $package->hasMigrations([
+            'create_spyglass_exceptions_tables',
+            'create_spyglass_logs_table',
+        ]);
     }
 
     public function packageRegistered(): void
@@ -61,6 +69,12 @@ class SpyglassServiceProvider extends PackageServiceProvider
         // Resolving here pins the connection and cache store names before anything
         // (e.g. tenancy) can switch the application defaults at runtime.
         $spyglass = $this->app->make(Spyglass::class);
+
+        // Even when disabled: a `stack` listing an unknown driver sends every record to the emergency logger
+        // instead of its other channels. The logs module replaces it when enabled.
+        $this->callAfterResolving('log', function (LogManager $log) {
+            $log->extend('spyglass', fn () => new Logger('spyglass', [new NullHandler]));
+        });
 
         if (! config('spyglass.enabled')) {
             return;
@@ -93,6 +107,10 @@ class SpyglassServiceProvider extends PackageServiceProvider
         // Also ends console commands. Not `CommandFinished`: `Artisan::call()` fires it inside the
         // calling request or job, whose lifecycle still owns the entries.
         $this->app->terminating($flush);
+
+        // After Laravel's own shutdown handler, which reports fatal errors, and after `terminating` callbacks
+        // registered later, such as `dispatch()->afterResponse()`.
+        register_shutdown_function($flush);
 
         Event::listen([
             // The worker reports a job's exception after `JobAttempted`.

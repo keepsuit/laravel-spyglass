@@ -24,6 +24,7 @@ return new class extends Migration
             $table->unsignedInteger('duration_max')->default(0);
             $table->unsignedInteger('total')->nullable();
             $table->unsignedInteger('peak')->nullable();
+            $table->unsignedInteger('low')->nullable();
             $table->unique(['bucket', 'name']);
         });
     }

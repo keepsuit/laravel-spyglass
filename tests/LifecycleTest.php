@@ -125,6 +125,10 @@ it('flushes when the application terminates', function () {
     expect(names())->toBe(['console']);
 });
 
+it('flushes entries recorded after the terminating flush when the process ends', function () {
+    expect(runToProcessEnd('terminating')->table('spyglass_test_entries')->pluck('name')->all())->toBe(['late']);
+});
+
 it('flushes after each scheduled task', function () {
     $this->travelTo(now()->setTime(12, 0));
 

@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static \Illuminate\Database\Connection connection()
  * @method static \Illuminate\Contracts\Cache\Repository cache()
  * @method static void insert(string $table, array<string, mixed> $row)
- * @method static void upsert(string $table, array<string, mixed> $key, array<string, mixed> $values = [], array<string, int|float> $increment = [], array<string, mixed> $max = [])
+ * @method static void upsert(string $table, array<string, mixed> $key, array<string, mixed> $values = [], array<string, int|float> $increment = [], array<string, mixed> $max = [], array<string, mixed> $min = [])
  * @method static void flush()
  * @method static mixed ignore(\Closure $callback)
  * @method static bool isIgnoring()

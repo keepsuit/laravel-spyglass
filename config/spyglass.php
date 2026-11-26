@@ -76,13 +76,20 @@ return [
                 'occurrences' => 30,
                 'resolved_groups' => 30,
             ],
+            // Query string keys stored with their value. Every other value is stored as `***`.
+            'query_allowlist' => [],
         ],
 
+        // Add the `spyglass` channel to the application's stack in config/logging.php:
+        //   'stack' => ['driver' => 'stack', 'channels' => ['stderr', 'spyglass']],
+        //   'spyglass' => ['driver' => 'spyglass'],
         'logs' => [
             'enabled' => true,
             'retention' => [
                 'entries' => 7,
             ],
+            // Lowest level stored.
+            'level' => 'warning',
         ],
 
         'health' => [

@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
+use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
@@ -31,12 +33,14 @@ class Spyglass
     public static array $modules = [
         'schedule' => ScheduleModule::class,
         'queue' => QueueModule::class,
+        'exceptions' => ExceptionsModule::class,
+        'logs' => LogsModule::class,
     ];
 
     /** @var array<string, list<array<string, mixed>>> */
     protected array $inserts = [];
 
-    /** @var array<string, array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>}>> */
+    /** @var array<string, array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>, min: array<string, mixed>}>> */
     protected array $upserts = [];
 
     protected int $buffered = 0;
@@ -163,15 +167,16 @@ class Spyglass
 
     /**
      * Buffer an upsert on the unique `$key` columns. Calls with the same key are merged in memory
-     * (last `$values` win, `$increment` is summed, `$max` keeps the greatest) and stored in one
+     * (last `$values` win, `$increment` is summed, `$max` keeps the greatest, `$min` the smallest) and stored in one
      * batch per table. No context is captured: merge `captureContext()` into `$values` if needed.
      *
      * @param  non-empty-array<non-empty-string, mixed>  $key
      * @param  array<string, mixed>  $values
      * @param  array<string, int|float>  $increment
      * @param  array<string, mixed>  $max
+     * @param  array<string, mixed>  $min
      */
-    public function upsert(string $table, array $key, array $values = [], array $increment = [], array $max = []): void
+    public function upsert(string $table, array $key, array $values = [], array $increment = [], array $max = [], array $min = []): void
     {
         if (! $this->enabled || $this->ignoring) {
             return;
@@ -182,7 +187,7 @@ class Spyglass
         $id = serialize(array_map(fn ($value) => is_scalar($value) ? (string) (is_bool($value) ? (int) $value : $value) : $value, $key));
 
         if (! isset($this->upserts[$table][$id])) {
-            $this->upserts[$table][$id] = ['key' => $key, 'values' => $values, 'increment' => $increment, 'max' => $max];
+            $this->upserts[$table][$id] = ['key' => $key, 'values' => $values, 'increment' => $increment, 'max' => $max, 'min' => $min];
             $this->trackBufferSize();
 
             return;
@@ -195,8 +200,15 @@ class Spyglass
             $pending['increment'][$column] = ($pending['increment'][$column] ?? 0) + $amount;
         }
 
+        // A NULL never replaces a value: PHP's min() would pick it.
         foreach ($max as $column => $value) {
-            $pending['max'][$column] = isset($pending['max'][$column]) ? max($pending['max'][$column], $value) : $value;
+            $current = $pending['max'][$column] ?? null;
+            $pending['max'][$column] = $current === null || $value === null ? $value ?? $current : max($current, $value);
+        }
+
+        foreach ($min as $column => $value) {
+            $current = $pending['min'][$column] ?? null;
+            $pending['min'][$column] = $current === null || $value === null ? $value ?? $current : min($current, $value);
         }
     }
 
@@ -334,7 +346,7 @@ class Spyglass
     }
 
     /**
-     * @param  array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>}>  $pending
+     * @param  array<string, array{key: non-empty-array<non-empty-string, mixed>, values: array<string, mixed>, increment: array<string, int|float>, max: array<string, mixed>, min: array<string, mixed>}>  $pending
      */
     protected function storeUpserts(Connection $db, string $table, array $pending): void
     {
@@ -365,7 +377,11 @@ class Spyglass
                 $update[$column] = $this->upsertExpression($db, $table, $column, 'max');
             }
 
-            $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'], $group);
+            foreach (array_keys($first['min']) as $column) {
+                $update[$column] = $this->upsertExpression($db, $table, $column, 'min');
+            }
+
+            $rows = array_map(fn (array $entry) => $entry['key'] + $entry['values'] + $entry['increment'] + $entry['max'] + $entry['min'], $group);
 
             foreach (array_chunk($rows, $this->chunkSize($rows[0])) as $chunk) {
                 $db->table($table)->upsert($chunk, array_keys($first['key']), $update);
@@ -403,7 +419,7 @@ class Spyglass
     }
 
     /**
-     * @param  'increment'|'max'  $operation
+     * @param  'increment'|'max'|'min'  $operation
      */
     protected function upsertExpression(Connection $db, string $table, string $column, string $operation): ExpressionContract
     {
@@ -419,10 +435,15 @@ class Spyglass
             default => throw new RuntimeException("Spyglass does not support the [{$db->getDriverName()}] database driver."),
         };
 
-        // The existing value is NULL when the row was created by an upsert that did not set this column.
+        // Either side can be NULL: the existing value when the row was created by an upsert that did not set this
+        // column, the incoming one when the caller had none. MySQL and SQLite return NULL if any argument is NULL.
+        $either = "coalesce({$existing}, {$incoming}), coalesce({$incoming}, {$existing})";
+
         // @phpstan-ignore argument.type (built from wrapped column names declared by modules, never from input)
-        return new Expression($operation === 'increment'
-            ? "coalesce({$existing}, 0) + {$incoming}"
-            : ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."(coalesce({$existing}, {$incoming}), {$incoming})");
+        return new Expression(match ($operation) {
+            'increment' => "coalesce({$existing}, 0) + {$incoming}",
+            'max' => ($db->getDriverName() === 'sqlite' ? 'max' : 'greatest')."({$either})",
+            'min' => ($db->getDriverName() === 'sqlite' ? 'min' : 'least')."({$either})",
+        });
     }
 }

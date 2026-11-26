@@ -46,12 +46,12 @@ it('increments with the MySQL upsert alias syntax', function () {
     config()->set("database.connections.{$connection}.use_upsert_alias", true);
     DB::purge($connection);
 
-    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['count' => 1], max: ['duration_max' => 5]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['count' => 1], max: ['duration_max' => 5], min: ['low' => 5]);
     Spyglass::flush();
-    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['count' => 2], max: ['duration_max' => 3]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['count' => 2], max: ['duration_max' => 3], min: ['low' => 3]);
     Spyglass::flush();
 
-    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['count' => 3, 'duration_max' => 5]);
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['count' => 3, 'duration_max' => 5, 'low' => 3]);
 })->skip(fn () => ! in_array(DB::getDriverName(), ['mysql', 'mariadb']), 'MySQL only');
 
 it('captures scope and context when the entry is created', function () {
@@ -227,14 +227,47 @@ it('writes upserts in key order', function () {
     expect(Spyglass::connection()->getQueryLog()[0]['bindings'])->toBe(['b1', 1, 'a', 'b1', 1, 'b']);
 });
 
-it('increments and maximizes columns left NULL by an earlier upsert', function () {
+it('increments, maximizes and minimizes columns left NULL by an earlier upsert', function () {
     Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['count' => 1]);
     Spyglass::flush();
 
-    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['total' => 3], max: ['peak' => 5]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], increment: ['total' => 3], max: ['peak' => 5], min: ['low' => 5]);
     Spyglass::flush();
 
-    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['count' => 1, 'total' => 3, 'peak' => 5]);
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['count' => 1, 'total' => 3, 'peak' => 5, 'low' => 5]);
+});
+
+it('keeps the smallest value of min columns, in memory and in storage', function () {
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], min: ['low' => 5]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], min: ['low' => 7]);
+    Spyglass::flush();
+
+    expect(DB::table('spyglass_test_counters')->value('low'))->toBe(5);
+
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], min: ['low' => 9]);
+    Spyglass::flush();
+
+    expect(DB::table('spyglass_test_counters')->value('low'))->toBe(5);
+
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'a'], min: ['low' => 2]);
+    Spyglass::flush();
+
+    expect(DB::table('spyglass_test_counters')->value('low'))->toBe(2);
+});
+
+it('never replaces a min or max value with NULL, in memory and in storage', function () {
+    $key = ['bucket' => 'b1', 'name' => 'a'];
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => 5], min: ['low' => 7]);
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => 5]);
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => null]);
+    Spyglass::flush();
+
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['peak' => 5, 'low' => 5]);
+
+    Spyglass::upsert('spyglass_test_counters', $key, max: ['peak' => null], min: ['low' => null]);
+    Spyglass::flush();
+
+    expect((array) DB::table('spyglass_test_counters')->first())->toMatchArray(['peak' => 5, 'low' => 5]);
 });
 
 it('keeps an open application transaction usable when storage fails', function () {
