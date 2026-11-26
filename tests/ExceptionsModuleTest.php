@@ -503,9 +503,9 @@ it('truncates messages and bounds the trace', function () {
 
     $occurrence = exceptionOccurrences()[0];
 
-    expect(strlen(exceptionGroup()['message']))->toBe(4096)
+    expect(mb_strlen(exceptionGroup()['message']))->toBe(4096)
         ->and(mb_check_encoding(exceptionGroup()['message'], 'UTF-8'))->toBeTrue()
-        ->and(strlen($occurrence['message']))->toBe(4096)
+        ->and(mb_strlen($occurrence['message']))->toBe(4096)
         ->and(json_decode($occurrence['trace'], true))->toHaveCount(50);
 });
 

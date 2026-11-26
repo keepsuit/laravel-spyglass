@@ -126,7 +126,13 @@ final class Sources
     {
         $source = $this->resolve($exception);
 
-        return [...$source, 'name' => $source['name'] ?? (string) $source['source']];
+        return [
+            ...$source,
+            'source' => $source['source'] === null ? null : Text::clip($source['source']),
+            'source_id' => $source['source_id'] === null ? null : Text::clip($source['source_id'], 64),
+            'route' => $source['route'] === null ? null : Text::clip($source['route'], 255),
+            'name' => $source['name'] ?? (string) $source['source'],
+        ];
     }
 
     /**

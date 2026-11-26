@@ -23,8 +23,9 @@ return new class extends Migration
             $table->string('level', 16)->nullable();
             $table->dateTime('recorded_at', 3);
             $table->text('message');
-            // The trace or the log context. Text, not JSON: truncation can cut the log context short.
-            $table->text('body')->nullable();
+            // The trace or the log context. Not JSON: truncation can cut the log context short. Medium: an
+            // escaped trace can exceed MySQL's 64 KB TEXT.
+            $table->mediumText('body')->nullable();
             // The innermost `getPrevious()`: what a wrapping exception hides.
             $table->string('cause_class', 255)->nullable();
             $table->text('cause_message')->nullable();

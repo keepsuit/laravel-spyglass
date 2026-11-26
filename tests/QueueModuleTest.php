@@ -323,6 +323,17 @@ it('keeps aggregates per scope next to the totals when enabled', function () {
         ]);
 });
 
+it('counts a scope that clips to nothing in the total only, once', function () {
+    config()->set('spyglass.modules.queue.aggregate_by_scope', true);
+    SpyglassFacade::resolveScopeUsing(fn () => "\0");
+
+    QueueJob::dispatch();
+    SpyglassFacade::flush();
+
+    expect(DB::table(QueueModule::AGGREGATES)->get(['scope', 'queued'])->map(fn ($row) => (array) $row)->all())
+        ->toBe([['scope' => '', 'queued' => 1]]);
+});
+
 it('adds up increments buffered by separate workers on the same bucket row', function () {
     QueueJob::dispatch();
     QueueJob::dispatch();

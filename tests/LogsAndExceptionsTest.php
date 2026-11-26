@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsAndLogsModules;
 
 uses(WithExceptionsAndLogsModules::class);
@@ -63,4 +64,12 @@ it('prunes each kind of a shared table by its own retention', function () {
         ->and(exceptionOccurrencesTable()->pluck('message')->all())->toBe(['Old exception'])
         ->and(exceptionGroupsTable()->count())->toBe(1)
         ->and(sourcesTable()->where('kind', 'exception')->count())->toBe(1);
+});
+
+it('lists only log entries among the shared entries', function () {
+    report(new LogicException('Not a log'));
+    Log::error('A log');
+    Spyglass::flush();
+
+    expect(collect(app(LogQueries::class)->entries()->items())->pluck('message')->all())->toBe(['A log']);
 });

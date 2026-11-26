@@ -6,6 +6,8 @@ use Closure;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DetectsConcurrencyErrors;
+use Illuminate\Database\DetectsLostConnections;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -18,11 +20,14 @@ use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
+use Keepsuit\Spyglass\Support\Text;
 use RuntimeException;
 use Throwable;
 
 class Spyglass
 {
+    use DetectsConcurrencyErrors, DetectsLostConnections;
+
     /**
      * Module classes keyed by their `spyglass.modules` config key.
      *
@@ -46,6 +51,9 @@ class Spyglass
     protected int $buffered = 0;
 
     protected bool $ignoring = false;
+
+    /** Set when the storage stops answering, so the rest of the flush does not wait on it statement by statement. */
+    protected bool $unavailable = false;
 
     protected ?int $reportedAt = null;
 
@@ -134,8 +142,12 @@ class Spyglass
                 $keys = config('spyglass.context.keys', []);
                 $context = $keys === [] ? [] : Context::only($keys);
 
+                $scope = $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null;
+
+                $scope = $scope === null ? null : Text::clip($scope, 191);
+
                 return [
-                    'scope' => $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null,
+                    'scope' => $scope === '' ? null : $scope,
                     'context' => $context === [] ? null : (json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: null),
                 ];
             } catch (Throwable $e) {
@@ -224,6 +236,8 @@ class Spyglass
         [$inserts, $upserts] = [$this->inserts, $this->upserts];
         $this->inserts = $this->upserts = [];
         $this->buffered = 0;
+
+        $this->unavailable = false;
 
         $this->ignore(function () use ($inserts, $upserts) {
             try {
@@ -394,9 +408,14 @@ class Spyglass
      */
     protected function storeChunk(string $table, Closure $store): void
     {
+        if ($this->unavailable) {
+            return;
+        }
+
         try {
             $store();
         } catch (Throwable $e) {
+            $this->unavailable = $this->causedByLostConnection($e) || $this->causedByConcurrencyError($e);
             $this->report("Spyglass failed to store entries in [{$table}]", $e);
         }
     }

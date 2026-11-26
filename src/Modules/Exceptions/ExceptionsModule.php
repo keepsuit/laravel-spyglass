@@ -194,7 +194,7 @@ class ExceptionsModule extends Module
         try {
             $id = Auth::id();
 
-            return $id === null ? null : (string) $id;
+            return $id === null ? null : Text::clip((string) $id, 191);
         } catch (Throwable) {
             return null;
         }
@@ -250,7 +250,8 @@ class ExceptionsModule extends Module
         $deleted = 0;
 
         do {
-            $fingerprints = $groups()->where($resolved)->limit(1000)->pluck('signature')->all();
+            // Under SQLite's 999 bound parameters, with the other bindings of the delete.
+            $fingerprints = $groups()->where($resolved)->limit(900)->pluck('signature')->all();
 
             if ($fingerprints === []) {
                 break;
@@ -261,8 +262,9 @@ class ExceptionsModule extends Module
             $gone = array_diff($fingerprints, $groups()->whereIn('signature', $fingerprints)->where('source_type', '')->pluck('signature')->all());
 
             // A group recreated later must not inherit the counts of its sources.
+            // ponytail: a group reopened between these two statements loses its sources; lock per group if it matters.
             $deleted += $gone === [] ? 0 : $groups()->whereIn('signature', $gone)->where('source_type', '!=', '')->delete();
-        } while (count($fingerprints) === 1000);
+        } while (count($fingerprints) === 900);
 
         return [self::GROUPS.' (exception, resolved)' => $deleted];
     }

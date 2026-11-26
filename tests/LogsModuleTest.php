@@ -247,9 +247,9 @@ it('truncates the message and the record context', function () {
 
     $entry = logEntries()[0];
 
-    expect(strlen($entry['message']))->toBe(4096)
+    expect(mb_strlen($entry['message']))->toBe(4096)
         ->and(mb_check_encoding($entry['message'], 'UTF-8'))->toBeTrue()
-        ->and(strlen($entry['log_context']))->toBe(4096);
+        ->and(mb_strlen($entry['log_context']))->toBe(4096);
 });
 
 it('lets records reach the channels after it', function () {

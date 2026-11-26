@@ -274,8 +274,11 @@ class QueueModule extends Module
         // The unscoped row is the total of every scope, so unfiltered reads never sum scoped rows.
         Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => ''], increment: $increment, max: ['duration_max' => $duration ?? 0]);
 
-        if ($scope !== null && $scope !== '' && config('spyglass.modules.queue.aggregate_by_scope')) {
-            Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => Text::clip($scope, 191)], increment: $increment, max: ['duration_max' => $duration ?? 0]);
+        // Clipped first: a scope that clips to '' would count in the total twice.
+        $scope = Text::clip($scope ?? '', 191);
+
+        if ($scope !== '' && config('spyglass.modules.queue.aggregate_by_scope')) {
+            Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => $scope], increment: $increment, max: ['duration_max' => $duration ?? 0]);
         }
     }
 }

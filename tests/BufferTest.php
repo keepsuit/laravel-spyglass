@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Cache\ArrayStore;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -189,6 +190,31 @@ it('stores the other rows of a table when one statement fails', function () {
 
     expect(array_column(entries(), 'name'))->toBe(['kept'])
         ->and(DB::table('spyglass_test_counters')->pluck('name')->all())->toBe(['kept'])
+        ->and($this->spyglassErrors)->toHaveCount(1);
+    $this->spyglassErrors = [];
+});
+
+it('stops the flush when the storage connection is lost', function () {
+    $attempts = 0;
+    $lost = true;
+    Spyglass::connection()->beforeExecuting(function () use (&$attempts, &$lost) {
+        if (! $lost) {
+            return;
+        }
+
+        $attempts++;
+
+        throw new QueryException(Spyglass::connection()->getName(), 'insert', [], new PDOException('server has gone away'));
+    });
+
+    Spyglass::insert('spyglass_test_entries', ['name' => 'a']);
+    Spyglass::insert('spyglass_test_entries', ['name' => 'b', 'scope' => null, 'context' => null, 'created_at' => null]);
+    Spyglass::upsert('spyglass_test_counters', ['bucket' => 'b1', 'name' => 'c'], increment: ['count' => 1]);
+    Spyglass::flush();
+
+    $lost = false;
+
+    expect($attempts)->toBe(1)
         ->and($this->spyglassErrors)->toHaveCount(1);
     $this->spyglassErrors = [];
 });
