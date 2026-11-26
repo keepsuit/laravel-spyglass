@@ -170,7 +170,8 @@ final class Sources
             'kind' => $kind,
             'signature' => $signature,
             'source_type' => $source['source_type'],
-            'source' => mb_substr(self::name($source), 0, 191),
+            // Scrubbed: PostgreSQL rejects invalid UTF-8 and NUL bytes, and with them the whole batch.
+            'source' => mb_substr($this->truncate(self::name($source)), 0, 191),
         ], increment: ['count' => 1], max: ['last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]);
     }
 

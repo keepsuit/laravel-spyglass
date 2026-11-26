@@ -594,8 +594,12 @@ it('stores the root cause of a wrapped exception, without query bindings', funct
     reportAndFlush(new RuntimeException('Sync failed', previous: new LogicException('Retry failed', previous: $query)));
     reportAndFlush(new ExceptionsModuleTestException);
 
+    // Its previous is the driver error, whose message can hold the data.
+    reportAndFlush(new QueryException('testing', 'insert into users (email) values (?)', ['a@b.c'], new PDOException("Duplicate entry 'a@b.c'")));
+
     expect(array_map(fn ($occurrence) => [$occurrence['cause_class'], $occurrence['cause_message']], exceptionOccurrences()))->toBe([
         [QueryException::class, 'SQLSTATE[0]: select * from users where email = ?'],
+        [null, null],
         [null, null],
     ]);
 });

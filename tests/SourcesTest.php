@@ -61,9 +61,13 @@ it('stops attributing entries to a task once it finished', function () {
     expect(sourcesOf(LogsModule::ENTRIES)[0][0])->toBe('command');
 });
 
-it('attributes what a background task process logs to its run', function () {
+it('attributes what the process of a command task logs to its run', function (bool $background) {
     $file = tempnam(sys_get_temp_dir(), 'spyglass');
-    app(Schedule::class)->exec('printenv __LARAVEL_CONTEXT')->runInBackground()->everyMinute()->sendOutputTo($file);
+    $task = app(Schedule::class)->exec('printenv __LARAVEL_CONTEXT')->everyMinute()->sendOutputTo($file);
+
+    if ($background) {
+        $task->runInBackground();
+    }
 
     test()->artisan('schedule:run');
 
@@ -77,6 +81,14 @@ it('attributes what a background task process logs to its run', function () {
     Log::warning('In the background');
     Spyglass::flush();
 
-    expect(sourcesOf(LogsModule::ENTRIES))->toBe([['schedule', 'printenv __LARAVEL_CONTEXT', DB::table(ScheduleModule::RUNS)->value('id')]])
-        ->and(Context::hasHidden(Sources::CONTEXT_SOURCE))->toBeTrue();
+    expect(sourcesOf(LogsModule::ENTRIES))->toBe([['schedule', 'printenv __LARAVEL_CONTEXT', DB::table(ScheduleModule::RUNS)->value('id')]]);
+})->with(['foreground' => false, 'background' => true]);
+
+it('keeps the source of a command task out of the scheduler process once it ended', function () {
+    app(Schedule::class)->exec('true')->everyMinute();
+    app(Schedule::class)->exec('exit 3')->everyMinute();
+
+    test()->artisan('schedule:run');
+
+    expect(Context::hasHidden(Sources::CONTEXT_SOURCE))->toBeFalse();
 });

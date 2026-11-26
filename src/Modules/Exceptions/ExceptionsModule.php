@@ -147,7 +147,7 @@ class ExceptionsModule extends Module
 
         // Bounded: a chain can loop when an exception is set as its own previous through reflection. Not past a
         // query error: what it wraps is the driver error, whose message can hold the data.
-        for ($previous = $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50 && ! $cause instanceof QueryException; $previous = $previous->getPrevious(), $depth++) {
+        for ($previous = $e instanceof QueryException ? null : $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50 && ! $cause instanceof QueryException; $previous = $previous->getPrevious(), $depth++) {
             $cause = $previous;
         }
 

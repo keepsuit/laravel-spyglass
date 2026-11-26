@@ -110,9 +110,11 @@ class ScheduleModule extends Module
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
+            // The process got it already.
+            Context::forgetHidden(Sources::CONTEXT_SOURCE);
+
             if ($task->runInBackground) {
                 Context::forgetHidden(self::CONTEXT_RUN);
-                Context::forgetHidden(Sources::CONTEXT_SOURCE);
             }
 
             // Laravel throws on a non-zero exit code right after this event: the exception keeps the task as its source.
@@ -145,9 +147,10 @@ class ScheduleModule extends Module
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
+            Context::forgetHidden(Sources::CONTEXT_SOURCE);
+
             if ($task->runInBackground) {
                 Context::forgetHidden(self::CONTEXT_RUN);
-                Context::forgetHidden(Sources::CONTEXT_SOURCE);
             }
 
             // Laravel reports the exception after this event.
@@ -383,10 +386,14 @@ class ScheduleModule extends Module
         $label = $this->identityOf($task)['label'];
         app(Sources::class)->enterTask($label, $id);
 
-        // Laravel passes the Context to the background process, and `schedule:finish` gets it back.
+        // Laravel passes the Context to the process of a command, in the foreground too.
+        if (! $task instanceof CallbackEvent) {
+            Context::addHidden(Sources::CONTEXT_SOURCE, ['source' => $label, 'source_id' => $id]);
+        }
+
+        // `schedule:finish` gets it back.
         if ($task->runInBackground) {
             Context::addHidden(self::CONTEXT_RUN, $id);
-            Context::addHidden(Sources::CONTEXT_SOURCE, ['source' => $label, 'source_id' => $id]);
         }
     }
 
