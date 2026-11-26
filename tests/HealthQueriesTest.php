@@ -27,6 +27,26 @@ function healthChecksOf(string $prefix): array
     return array_filter(healthChecks(), fn (array $check) => str_starts_with($check['key'], $prefix.':'));
 }
 
+/**
+ * A server that accepts connections into the kernel backlog and never answers. Keep the resource referenced.
+ *
+ * @return array{resource, int}
+ */
+function stallingServer(): array
+{
+    $server = stream_socket_server('tcp://127.0.0.1:0');
+
+    return [$server, (int) substr((string) strrchr((string) stream_socket_get_name($server, false), ':'), 1)];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function stallingPgsql(int $port): array
+{
+    return ['driver' => 'pgsql', 'host' => '127.0.0.1', 'port' => $port, 'database' => 'x', 'username' => 'x', 'password' => 'x'];
+}
+
 it('reports the environment, debug mode and versions first', function () {
     config(['app.debug' => false]);
 
@@ -76,7 +96,22 @@ it('checks the default database once when Spyglass stores to a copy of it', func
     expect($checks)->toHaveCount(1)
         ->and($check)->toMatchArray(['status' => 'ok', 'message' => null])
         ->and($check['value'])->toBeFloat()
-        ->and(DB::getConnections())->not->toHaveKey('spyglass-health');
+        ->and(DB::getConnections())->not->toHaveKey('spyglass-health')
+        ->and(config('database.connections'))->not->toHaveKey('spyglass-health');
+});
+
+it('checks once two connections to the same server', function () {
+    config(['database.connections.copy' => config('database.connections.'.config('database.default'))]);
+    app()->instance(Spyglass::class, new Spyglass(connection: 'copy', cacheStore: 'array'));
+
+    expect(array_keys(healthChecksOf('database')))->toBe(['database:'.config('database.default')]);
+});
+
+it('reports a storage connection that is not configured as a failed check', function () {
+    config(['spyglass.modules.health.versions' => null]);
+    app()->instance(Spyglass::class, new Spyglass(connection: 'missing', cacheStore: 'array'));
+
+    expect(healthChecks()['database:missing']['status'])->toBe('error');
 });
 
 it('checks the configured connections and cache stores', function () {
@@ -105,38 +140,58 @@ it('reports a database error with its SQLSTATE only', function () {
     $check = healthChecks()['database:down'];
 
     expect($check['status'])->toBe('error')
-        ->and($check['message'])->toStartWith('PDOException: SQLSTATE[')
-        ->and($check['message'])->not->toContain('refused')
-        ->and($check['message'])->not->toContain('secret-user');
+        ->and($check['message'])->toBe('PDOException: SQLSTATE[HY000]');
 })->skip(! extension_loaded('pdo_mysql'), 'pdo_mysql is not installed.');
 
-it('gives up on an unreachable database after the connect timeout', function () {
+it('gives up on a database server that does not answer after the timeout', function (string $driver) {
+    [$server, $port] = stallingServer();
     config([
-        'database.connections.unreachable' => ['driver' => 'pgsql', 'host' => '10.255.255.1', 'port' => 5432, 'database' => 'x', 'username' => 'x', 'password' => 'x'],
-        'spyglass.modules.health.connections' => ['unreachable'],
+        'database.connections.stalled' => ['driver' => $driver, 'host' => '127.0.0.1', 'port' => $port, 'database' => 'x', 'username' => 'x', 'password' => 'x'],
+        'spyglass.modules.health.connections' => ['stalled'],
     ]);
 
     $start = microtime(true);
-    $check = healthChecks()['database:unreachable'];
+    $check = healthChecks()['database:stalled'];
 
+    // MySQL: Laravel retries the connect once as a lost connection.
     expect($check['status'])->toBe('error')
-        ->and(microtime(true) - $start)->toBeLessThan(4);
-})->skip(! extension_loaded('pdo_pgsql'), 'pdo_pgsql is not installed.');
+        ->and(microtime(true) - $start)->toBeGreaterThan(1.5)->toBeLessThan($driver === 'mysql' ? 5 : 3);
+})->with([
+    'pgsql' => fn () => extension_loaded('pdo_pgsql') ? 'pgsql' : test()->markTestSkipped('pdo_pgsql is not installed.'),
+    'mysql' => fn () => extension_loaded('pdo_mysql') ? 'mysql' : test()->markTestSkipped('pdo_mysql is not installed.'),
+]);
 
-it('gives up on an unreachable redis cache after the socket timeout', function () {
+it('gives up on a redis cache that does not answer after the timeout', function () {
+    [$server, $port] = stallingServer();
     config([
-        'database.redis.unreachable' => ['host' => '10.255.255.1', 'port' => 6379],
+        'database.redis.stalled' => ['host' => '127.0.0.1', 'port' => $port],
         'database.redis.client' => 'phpredis',
-        'cache.stores.unreachable' => ['driver' => 'redis', 'connection' => 'unreachable'],
-        'spyglass.modules.health.cache_stores' => ['unreachable'],
+        'cache.stores.stalled' => ['driver' => 'redis', 'connection' => 'stalled'],
+        'spyglass.modules.health.cache_stores' => ['stalled'],
     ]);
 
     $start = microtime(true);
-    $check = healthChecks()['cache:unreachable'];
+    $check = healthChecks()['cache:stalled'];
 
     expect($check['status'])->toBe('error')
-        ->and(microtime(true) - $start)->toBeLessThan(4);
+        ->and(microtime(true) - $start)->toBeGreaterThan(1.5)->toBeLessThan(3);
 })->skip(! extension_loaded('redis'), 'phpredis is not installed.');
+
+it('skips the database cache and queue once a database check failed', function () {
+    config([
+        'database.connections.down' => ['driver' => 'sqlite', 'database' => '/nonexistent/spyglass.sqlite', 'prefix' => ''],
+        'cache.stores.db' => ['driver' => 'database', 'table' => 'cache'],
+        'spyglass.modules.health.connections' => ['down'],
+        'spyglass.modules.health.cache_stores' => ['db', 'array'],
+    ]);
+
+    $checks = healthChecks();
+
+    expect($checks['database:down']['status'])->toBe('error')
+        ->and($checks['cache:db'])->toMatchArray(['status' => 'warning', 'message' => 'Skipped: a database check failed.'])
+        ->and($checks['cache:array']['status'])->toBe('ok')
+        ->and($checks['queue:database:default'])->toMatchArray(['status' => 'warning', 'message' => 'Skipped: a database check failed.']);
+});
 
 it('checks the default cache store with a real round trip, without leaving the key behind', function () {
     $checks = healthChecksOf('cache');
@@ -179,10 +234,11 @@ it('reports the queues seen by the queue module', function () {
         ->and(healthChecks()['queue:database:emails']['value'])->toBe(1);
 });
 
-it('does not count a queue for the sync driver and reports a backend that fails', function () {
-    config(['queue.default' => 'sync']);
+it('does not count a queue or a cache that stores nothing, and reports a backend that fails', function () {
+    config(['queue.default' => 'sync', 'cache.stores.none' => ['driver' => 'null'], 'spyglass.modules.health.cache_stores' => ['none']]);
 
-    expect(healthChecks()['queue:sync:default'])->toMatchArray(['status' => 'info', 'value' => null]);
+    expect(healthChecks()['queue:sync:default'])->toMatchArray(['status' => 'info', 'value' => null])
+        ->and(healthChecks()['cache:none'])->toMatchArray(['status' => 'info', 'value' => null]);
 
     config([
         'queue.connections.broken' => ['driver' => 'database', 'table' => 'missing_jobs', 'queue' => 'default'],
@@ -208,21 +264,41 @@ it('skips the checks left when the time budget is exhausted, never the environme
 });
 
 it('does not read the queue list from a storage that does not answer', function () {
-    config(['database.connections.unreachable' => ['driver' => 'pgsql', 'host' => '10.255.255.1', 'port' => 5432, 'database' => 'x', 'username' => 'x', 'password' => 'x']]);
-    app()->instance(Spyglass::class, new Spyglass(connection: 'unreachable', cacheStore: 'array'));
+    [$server, $port] = stallingServer();
+    config(['database.connections.stalled' => stallingPgsql($port)]);
+    app()->instance(Spyglass::class, new Spyglass(connection: 'stalled', cacheStore: 'array'));
 
     $start = microtime(true);
     $checks = healthChecks();
 
-    expect($checks['database:unreachable']['status'])->toBe('error')
+    expect($checks['database:stalled']['status'])->toBe('error')
         ->and($checks)->toHaveKey('queue:database:default')
-        ->and(microtime(true) - $start)->toBeLessThan(4);
+        ->and(microtime(true) - $start)->toBeLessThan(3);
 })->skip(! extension_loaded('pdo_pgsql'), 'pdo_pgsql is not installed.');
 
-it('restores the socket timeout', function () {
-    ini_set('default_socket_timeout', '45');
+it('does not read the queue list from a storage left out of the checked connections', function () {
+    [$server, $port] = stallingServer();
+    config([
+        'database.connections.stalled' => stallingPgsql($port),
+        'spyglass.modules.health.connections' => [config('database.default')],
+    ]);
+    app()->instance(Spyglass::class, new Spyglass(connection: 'stalled', cacheStore: 'array'));
+
+    $start = microtime(true);
+    $checks = healthChecks();
+
+    expect($checks)->toHaveKey('queue:database:default')
+        ->and(microtime(true) - $start)->toBeLessThan(1);
+})->skip(! extension_loaded('pdo_pgsql'), 'pdo_pgsql is not installed.');
+
+it('restores the socket timeouts', function () {
+    $previous = [ini_set('default_socket_timeout', '45'), ini_set('mysqlnd.net_read_timeout', '46')];
 
     app(HealthQueries::class)->checks();
 
-    expect(ini_get('default_socket_timeout'))->toBe('45');
+    expect(ini_get('default_socket_timeout'))->toBe('45')
+        ->and(ini_get('mysqlnd.net_read_timeout'))->toBe('46');
+
+    ini_set('default_socket_timeout', (string) $previous[0]);
+    ini_set('mysqlnd.net_read_timeout', (string) $previous[1]);
 });

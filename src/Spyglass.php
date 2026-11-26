@@ -84,6 +84,11 @@ class Spyglass
         return Cache::store($this->cacheStore);
     }
 
+    public function connectionName(): string
+    {
+        return $this->connection;
+    }
+
     public function cacheStore(): string
     {
         return $this->cacheStore;

@@ -5,6 +5,8 @@ namespace Keepsuit\Spyglass\Modules\Health;
 use Closure;
 use Composer\InstalledVersions;
 use Generator;
+use Illuminate\Queue\NullQueue;
+use Illuminate\Queue\SyncQueue;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -46,25 +48,35 @@ class HealthQueries
         return $this->spyglass->ignore(function () {
             $checks = $this->info();
             $deadline = hrtime(true) + static::BUDGET * 1_000_000_000;
+            $databaseFailed = false;
+            $storageAnswers = false;
 
-            // phpredis and mysqlnd fall back to it when no connect timeout is configured.
-            $socketTimeout = ini_set('default_socket_timeout', (string) static::TIMEOUT);
-
-            // The queue list comes from the storage, read without a connect timeout of its own.
-            $storageAnswers = function () use (&$checks, $deadline) {
-                return hrtime(true) <= $deadline
-                    && ! collect($checks)->contains(fn (array $check) => str_starts_with($check['key'], 'database:') && $check['status'] === 'error');
-            };
+            // Connect and read timeouts of phpredis and mysqlnd connections opened from here on.
+            $ini = [];
+            foreach (['default_socket_timeout', 'mysqlnd.net_read_timeout'] as $option) {
+                $ini[$option] = ini_set($option, (string) static::TIMEOUT);
+            }
 
             try {
-                foreach ($this->probes($storageAnswers) as $key => [$label, $probe]) {
-                    $checks[] = hrtime(true) > $deadline
-                        ? $this->check($key, $label, 'warning', message: 'Skipped: time budget exhausted.')
-                        : $this->run($key, $label, $probe);
+                foreach ($this->probes($storageAnswers) as $key => [$label, $probe, $usesDatabase]) {
+                    $check = match (true) {
+                        hrtime(true) > $deadline => $this->check($key, $label, 'warning', message: 'Skipped: time budget exhausted.'),
+                        // It would reach the database through a connection without the timeouts above.
+                        $usesDatabase && $databaseFailed => $this->check($key, $label, 'warning', message: 'Skipped: a database check failed.'),
+                        default => $this->run($key, $label, $probe),
+                    };
+
+                    if (str_starts_with($key, 'database:')) {
+                        $databaseFailed = $databaseFailed || $check['status'] === 'error';
+                        $storageAnswers = $storageAnswers || ($check['status'] === 'ok' && $this->isStorage(substr($key, 9)));
+                    }
+
+                    $storageAnswers = $storageAnswers && ! $databaseFailed && hrtime(true) <= $deadline;
+                    $checks[] = $check;
                 }
             } finally {
-                if ($socketTimeout !== false) {
-                    ini_set('default_socket_timeout', $socketTimeout);
+                foreach (array_filter($ini, fn ($value) => $value !== false) as $option => $value) {
+                    ini_set($option, $value);
                 }
             }
 
@@ -91,7 +103,7 @@ class HealthQueries
             $checks[] = $this->check('version', 'Application version', 'info', (string) $version);
         }
 
-        foreach (config('spyglass.modules.health.versions', []) as $label => $package) {
+        foreach (config('spyglass.modules.health.versions') ?? [] as $label => $package) {
             if (InstalledVersions::isInstalled($package)) {
                 $checks[] = $this->check("package:{$package}", (string) $label, 'info', InstalledVersions::getPrettyVersion($package));
             }
@@ -101,21 +113,23 @@ class HealthQueries
     }
 
     /**
-     * @param  Closure(): bool  $storageAnswers
-     * @return Generator<string, array{string, Closure(): array{0: Status, 1: mixed, 2?: string}}>
+     * Each probe with whether it uses an application database connection. The queue list is read from the
+     * storage only once `$storageAnswers` is set, by the time the queue probes start.
+     *
+     * @return Generator<string, array{string, Closure(): array{0: Status, 1: mixed, 2?: string}, bool}>
      */
-    protected function probes(Closure $storageAnswers): Generator
+    protected function probes(bool &$storageAnswers): Generator
     {
         foreach ($this->connections() as $name) {
-            yield "database:{$name}" => ["Database {$name}", fn () => $this->database($name)];
+            yield "database:{$name}" => ["Database {$name}", fn () => $this->database($name), false];
         }
 
         foreach ($this->cacheStores() as $name) {
-            yield "cache:{$name}" => ["Cache {$name}", fn () => $this->cache($name)];
+            yield "cache:{$name}" => ["Cache {$name}", fn () => $this->cache($name), config("cache.stores.{$name}.driver") === 'database'];
         }
 
-        foreach ($this->queueNames($storageAnswers()) as [$connection, $queue]) {
-            yield "queue:{$connection}:{$queue}" => ["Queue {$connection} / {$queue}", fn () => $this->queue($connection, $queue)];
+        foreach ($this->queueNames($storageAnswers) as [$connection, $queue]) {
+            yield "queue:{$connection}:{$queue}" => ["Queue {$connection} / {$queue}", fn () => $this->queue($connection, $queue), config("queue.connections.{$connection}.driver") === 'database'];
         }
     }
 
@@ -125,16 +139,26 @@ class HealthQueries
     protected function connections(): array
     {
         $names = config('spyglass.modules.health.connections')
-            ?? [config('database.default'), $this->spyglass->connection()->getName()];
+            ?? [config('database.default'), $this->spyglass->connectionName()];
 
         // The storage connection is a copy of an application connection: the same server is checked once.
         $unique = [];
 
         foreach ($names as $name) {
-            $unique[json_encode(config("database.connections.{$name}") ?? $name)] ??= $name;
+            $unique[$this->server($name)] ??= $name;
         }
 
         return array_values($unique);
+    }
+
+    protected function isStorage(string $connection): bool
+    {
+        return $this->server($connection) === $this->server($this->spyglass->connectionName());
+    }
+
+    protected function server(string $connection): string
+    {
+        return (string) json_encode(config("database.connections.{$connection}") ?? $connection);
     }
 
     /**
@@ -182,14 +206,13 @@ class HealthQueries
     {
         $config = config("database.connections.{$name}") ?? throw new InvalidArgumentException("Database connection [{$name}] is not configured.");
 
-        // A connection of its own gets the connect timeout; pdo_pgsql ignores the socket timeout.
-        config(['database.connections.'.static::CONNECTION => array_replace($config, [
-            'options' => array_replace($config['options'] ?? [], [PDO::ATTR_TIMEOUT => static::TIMEOUT]),
-        ])]);
-
         try {
             $start = hrtime(true);
-            // Plain PDO: Laravel would retry a connect that timed out as a lost connection, doubling the wait.
+            // A connection of its own gets the connect timeout, which pdo_pgsql needs: it ignores the socket timeout.
+            // ponytail: Laravel retries a connect that fails as a lost connection, so MySQL can take twice the timeout.
+            DB::connectUsing(static::CONNECTION, array_replace($config, [
+                'options' => array_replace($config['options'] ?? [], [PDO::ATTR_TIMEOUT => static::TIMEOUT]),
+            ]));
             DB::connection(static::CONNECTION)->getPdo()->query('select 1');
 
             return ['ok', $this->elapsed($start)];
@@ -199,10 +222,14 @@ class HealthQueries
     }
 
     /**
-     * @return array{0: Status, 1: float, 2?: string}
+     * @return array{0: Status, 1: ?float, 2?: string}
      */
     protected function cache(string $name): array
     {
+        if (config("cache.stores.{$name}.driver") === 'null') {
+            return ['info', null, 'The null driver stores nothing.'];
+        }
+
         $cache = Cache::store($name);
         $key = 'spyglass:health:'.Str::random(16);
 
@@ -220,13 +247,14 @@ class HealthQueries
      */
     protected function queue(string $connection, string $queue): array
     {
-        $driver = config("queue.connections.{$connection}.driver");
+        $backend = Queue::connection($connection);
 
-        if (in_array($driver, ['sync', 'null'], true)) {
-            return ['info', null, "The {$driver} driver keeps no queue."];
+        // Also the deferred and background drivers, which extend the sync one.
+        if ($backend instanceof SyncQueue || $backend instanceof NullQueue) {
+            return ['info', null, 'Jobs on this connection are not queued.'];
         }
 
-        return ['ok', Queue::connection($connection)->pendingSize($queue)];
+        return ['ok', $backend->pendingSize($queue)];
     }
 
     /**
