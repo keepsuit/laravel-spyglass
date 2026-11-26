@@ -21,11 +21,16 @@ return new class extends Migration
             // Text, not JSON: truncation can cut the JSON short.
             $table->text('log_context')->nullable();
             $table->dateTime('logged_at')->index();
+            $table->string('source_type', 16)->nullable();
+            $table->text('source')->nullable();
+            // The scheduled task run or the job uuid.
+            $table->string('source_id', 64)->nullable();
             $table->string('scope', 191)->nullable();
             $table->json('context')->nullable();
 
             $table->index(['level', 'logged_at']);
             $table->index(['scope', 'logged_at']);
+            $table->index(['source_type', 'source_id']);
         });
     }
 

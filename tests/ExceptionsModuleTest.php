@@ -20,8 +20,10 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\ConcurrentException;
 use Keepsuit\Spyglass\Tests\Fixtures\ForwardingExceptionHandler;
+use Keepsuit\Spyglass\Tests\Fixtures\QueueJob;
 use Keepsuit\Spyglass\Tests\Fixtures\TestJob;
 use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsModule;
 use NunoMaduro\Collision\Adapters\Laravel\ExceptionHandler as CollisionHandler;
@@ -468,6 +470,17 @@ it('stores the current scope of a job that reports after switching tenant', func
     expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'scope' => 'tenant:other']);
 });
 
+it('names the job after its class, not a display name that can embed ids', function () {
+    QueueJob::dispatch('throw', 'Order #12');
+    $uuid = json_decode(DB::table('jobs')->value('payload'), true)['uuid'];
+
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'source' => QueueJob::class])
+        ->and(exceptionOccurrences()[0]['source_id'])->toBe($uuid);
+});
+
 it('stores the console command name, without its arguments', function () {
     $argv = $_SERVER['argv'];
     $_SERVER['argv'] = ['artisan', 'orders:sync', '--token=secret'];
@@ -575,6 +588,64 @@ it('prunes groups resolved before their retention, unless they occurred again', 
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
 });
 
+it('stores the root cause of a wrapped exception, without query bindings', function () {
+    $query = new QueryException('testing', 'select * from users where email = ?', ['secret@example.com'], new PDOException('boom'));
+
+    reportAndFlush(new RuntimeException('Sync failed', previous: new LogicException('Retry failed', previous: $query)));
+    reportAndFlush(new ExceptionsModuleTestException);
+
+    // Its previous is the driver error, whose message can hold the data.
+    reportAndFlush(new QueryException('testing', 'insert into users (email) values (?)', ['a@b.c'], new PDOException("Duplicate entry 'a@b.c'")));
+
+    expect(array_map(fn ($occurrence) => [$occurrence['cause_class'], $occurrence['cause_message']], exceptionOccurrences()))->toBe([
+        [QueryException::class, 'SQLSTATE[0]: select * from users where email = ?'],
+        [null, null],
+        [null, null],
+    ]);
+});
+
+it('keeps the driver message of a PDO error out, whether wrapped, wrapping or copied', function () {
+    $driver = new PDOException("SQLSTATE[23000]: Duplicate entry 'mario@example.com' for key 'email'", 23000);
+    $query = new QueryException('testing', 'insert into users (email) values (?)', ['mario@example.com'], $driver);
+
+    reportAndFlush(new RuntimeException('Import failed', previous: $driver));
+    reportAndFlush($driver);
+    reportAndFlush(new LogicException('Rendering failed: '.$query->getMessage(), previous: $query));
+
+    foreach (exceptionOccurrences() as $occurrence) {
+        expect($occurrence['message'].' '.$occurrence['cause_message'])->not->toContain('mario@example.com');
+    }
+
+    expect(array_column(exceptionOccurrences(), 'cause_message'))->toContain('SQLSTATE[23000]');
+});
+
+it('removes the sources of the resolved groups it prunes', function () {
+    config()->set('spyglass.modules.exceptions.retention.resolved_groups', 1);
+    $fingerprint = ExceptionFingerprint::for(sameSiteException());
+
+    reportAndFlush(sameSiteException());
+    app(ExceptionQueries::class)->resolve($fingerprint);
+
+    $this->travel(2)->days();
+    $this->artisan('spyglass:prune')->assertSuccessful();
+
+    expect(app(ExceptionQueries::class)->sources($fingerprint))->toBe([]);
+});
+
+it('counts every source of a group, beyond the throttled occurrences', function () {
+    Route::get('/checkout', fn () => throw sameSiteException());
+    Route::get('/orders/{order}', fn () => throw sameSiteException());
+
+    foreach (['/checkout?page=1', '/checkout?page=2', '/checkout', '/orders/12'] as $path) {
+        $this->get($path)->assertServerError();
+    }
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences())->toHaveCount(1)
+        ->and(collect(app(ExceptionQueries::class)->sources(ExceptionFingerprint::for(sameSiteException())))->map(fn ($source) => [$source->source_type, $source->source, (int) $source->count])->all())
+        ->toBe([['request', 'GET /checkout', 3], ['request', 'GET /orders/{order}', 1]]);
+});
+
 it('prunes old occurrences and groups last seen before their retention', function () {
     $this->travelTo(now()->subDays(31));
     reportAndFlush(sameSiteException());
@@ -586,5 +657,6 @@ it('prunes old occurrences and groups last seen before their retention', functio
     $this->artisan('spyglass:prune')->assertSuccessful();
 
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class])
-        ->and(exceptionOccurrences())->toHaveCount(1);
+        ->and(exceptionOccurrences())->toHaveCount(1)
+        ->and(DB::table(Sources::TABLE)->where('kind', 'exception')->count())->toBe(1);
 });

@@ -6,6 +6,8 @@ use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Sources;
+use stdClass;
 
 /**
  * Read side of the exceptions module. Every query is bounded. Datetimes are UTC strings, as stored.
@@ -52,6 +54,16 @@ class ExceptionQueries
         $group = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint)->first();
 
         return $group === null ? null : $this->withStatus($group);
+    }
+
+    /**
+     * Where the group came from, most frequent first, with exact counts: occurrences are throttled.
+     *
+     * @return array<int, stdClass>
+     */
+    public function sources(string $fingerprint, int $limit = 100): array
+    {
+        return app(Sources::class)->of('exception', $fingerprint, $limit);
     }
 
     /**

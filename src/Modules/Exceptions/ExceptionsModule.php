@@ -3,23 +3,15 @@
 namespace Keepsuit\Spyglass\Modules\Exceptions;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
-use Illuminate\Http\Request;
-use Illuminate\Queue\Events\JobAttempted;
-use Illuminate\Queue\Events\JobExceptionOccurred;
-use Illuminate\Queue\Events\JobProcessing;
-use Illuminate\Queue\Jobs\SyncJob;
-use Illuminate\Routing\Route;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Date;
-use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
-use Symfony\Component\Console\Input\ArgvInput;
+use Keepsuit\Spyglass\Support\Sources;
+use PDOException;
 use Throwable;
 use WeakMap;
 
@@ -40,20 +32,6 @@ class ExceptionsModule extends Module
      */
     protected static ?WeakMap $recorded = null;
 
-    /**
-     * The job being processed by a worker, with the Context captured before tenancy can revert it.
-     *
-     * @var array{source: string, scope: ?string, context: ?string}|null
-     */
-    protected ?array $job = null;
-
-    /**
-     * The job each exception was thrown by: the worker reports it after the attempt ended.
-     *
-     * @var WeakMap<Throwable, array{source: string, scope: ?string, context: ?string}>
-     */
-    protected WeakMap $jobs;
-
     /** @var WeakMap<object, true> */
     protected WeakMap $handlers;
 
@@ -62,7 +40,6 @@ class ExceptionsModule extends Module
     public function __construct()
     {
         $this->handlers = new WeakMap;
-        $this->jobs = new WeakMap;
         $this->throttle = new Throttle;
     }
 
@@ -84,24 +61,6 @@ class ExceptionsModule extends Module
         if (is_object($handler)) {
             $this->register($handler);
         }
-
-        // Sync jobs run inside the dispatching request or command, which is their source.
-        Event::listen(JobProcessing::class, function (JobProcessing $event) {
-            if (! $event->job instanceof SyncJob) {
-                $this->job = ['source' => $event->job->resolveName(), ...Spyglass::captureContext()];
-            }
-        });
-        Event::listen(JobExceptionOccurred::class, function (JobExceptionOccurred $event) {
-            if ($this->job !== null && ! $event->job instanceof SyncJob) {
-                $this->jobs[$event->exception] = $this->job;
-            }
-        });
-        // `queue:work --once` never loops, so the job must not outlive its attempt.
-        Event::listen(JobAttempted::class, function (JobAttempted $event) {
-            if (! $event->job instanceof SyncJob) {
-                $this->job = null;
-            }
-        });
     }
 
     /**
@@ -136,10 +95,11 @@ class ExceptionsModule extends Module
                 [$file, $line] = ExceptionFingerprint::location($e);
                 $now = Date::now('UTC')->format('Y-m-d H:i:s.v');
                 $message = $this->message($e);
-                $source = $this->source($e);
+                $source = app(Sources::class)->current($e);
 
                 return [
                     'fingerprint' => $fingerprint,
+                    'source' => $source,
                     'group' => ['class' => $this->truncate($e::class, 255), 'message' => $message, 'file' => $this->truncate($file), 'line' => $line],
                     'now' => $now,
                     'occurrence' => $this->throttle->acquire('spyglass:exception:'.sha1($fingerprint.'|'.$source['scope'])) ? [
@@ -147,8 +107,9 @@ class ExceptionsModule extends Module
                         'occurred_at' => $now,
                         'message' => $message,
                         'trace' => json_encode($this->trace($e), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+                        ...$this->cause($e),
                         'user_id' => $this->userId(),
-                        ...$source,
+                        ...Arr::except($source, 'name'),
                     ] : null,
                 ];
             } catch (Throwable $failure) {
@@ -172,9 +133,29 @@ class ExceptionsModule extends Module
             min: ['first_seen_at' => $entry['now']],
         );
 
+        app(Sources::class)->count('exception', $entry['fingerprint'], $entry['source']);
+
         if ($entry['occurrence'] !== null) {
             Spyglass::insert(self::OCCURRENCES, $entry['occurrence']);
         }
+    }
+
+    /**
+     * @return array{cause_class: ?string, cause_message: ?string}
+     */
+    protected function cause(Throwable $e): array
+    {
+        $cause = null;
+
+        // Bounded: a chain can loop when an exception is set as its own previous through reflection. Not past a
+        // query error: what it wraps is the driver error, whose message can hold the data.
+        for ($previous = $e instanceof QueryException ? null : $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50 && ! $cause instanceof QueryException; $previous = $previous->getPrevious(), $depth++) {
+            $cause = $previous;
+        }
+
+        return $cause === null
+            ? ['cause_class' => null, 'cause_message' => null]
+            : ['cause_class' => $this->truncate($cause::class, 255), 'cause_message' => $this->message($cause)];
     }
 
     protected function message(Throwable $e): string
@@ -187,7 +168,24 @@ class ExceptionsModule extends Module
      */
     public static function safeMessage(Throwable $e): string
     {
-        return $e instanceof QueryException ? "SQLSTATE[{$e->getCode()}]: {$e->getSql()}" : $e->getMessage();
+        if ($e instanceof QueryException) {
+            return "SQLSTATE[{$e->getCode()}]: {$e->getSql()}";
+        }
+
+        if ($e instanceof PDOException) {
+            return "SQLSTATE[{$e->getCode()}]";
+        }
+
+        $message = $e->getMessage();
+
+        // Wrappers such as `ViewException` copy the message of the database error they wrap.
+        for ($previous = $e->getPrevious(), $depth = 0; $previous !== null && $depth < 50; $previous = $previous->getPrevious(), $depth++) {
+            if (($previous instanceof QueryException || $previous instanceof PDOException) && $previous->getMessage() !== '') {
+                $message = str_replace($previous->getMessage(), self::safeMessage($previous), $message);
+            }
+        }
+
+        return $message;
     }
 
     protected function userId(): ?string
@@ -199,66 +197,6 @@ class ExceptionsModule extends Module
         } catch (Throwable) {
             return null;
         }
-    }
-
-    /**
-     * @return array{source_type: string, source: ?string, route: ?string, scope: ?string, context: ?string}
-     */
-    protected function source(Throwable $e): array
-    {
-        $job = $this->jobs[$e] ?? $this->job;
-
-        if ($job !== null) {
-            // The snapshot covers tenancy reverting the context before the failure is reported, not a job that switched tenant.
-            $current = Spyglass::captureContext();
-
-            return ['source_type' => 'job', 'route' => null, ...$job, ...($current['scope'] !== null ? $current : [])];
-        }
-
-        $kernel = app()->resolved(HttpKernelContract::class) ? app(HttpKernelContract::class) : null;
-
-        // Not `CommandStarting`: Laravel skips it in tests, and fires `CommandFinished` before an uncaught exception is reported.
-        if (! $kernel instanceof HttpKernel || $kernel->requestStartedAt() === null) {
-            return ['source_type' => 'command', 'source' => (new ArgvInput)->getFirstArgument(), 'route' => null, ...Spyglass::captureContext()];
-        }
-
-        /** @var Request $request */
-        $request = app('request');
-        $route = $request->route();
-
-        // The route URI, never the path: path parameters can be tokens or personal data. Before routing there is none.
-        if (! $route instanceof Route) {
-            return ['source_type' => 'request', 'source' => $request->getMethod().' (unrouted)', 'route' => null, ...Spyglass::captureContext()];
-        }
-
-        return [
-            'source_type' => 'request',
-            'source' => $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/').$this->maskedQuery($request)),
-            'route' => $route->getName(),
-            ...Spyglass::captureContext(),
-        ];
-    }
-
-    /**
-     * Query string values can hold tokens and personal data: only allowlisted keys keep theirs.
-     */
-    protected function maskedQuery(Request $request): string
-    {
-        $query = $request->getQueryString();
-
-        if ($query === null) {
-            return '';
-        }
-
-        $allowed = (array) config('spyglass.modules.exceptions.query_allowlist', []);
-
-        return '?'.collect(explode('&', $query))
-            ->map(function (string $pair) use ($allowed) {
-                $key = Str::before($pair, '=');
-
-                return in_array(Str::before(urldecode($key), '['), $allowed, true) ? $pair : "{$key}=***";
-            })
-            ->implode('&');
     }
 
     /**
@@ -301,14 +239,16 @@ class ExceptionsModule extends Module
     }
 
     /**
-     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since.
+     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since, and sources
+     * last seen before the `occurrences` one, as their groups are.
      */
     public function prune(): array
     {
+        $sources = [Sources::TABLE.' (exceptions)' => app(Sources::class)->prune('exception', config('spyglass.modules.exceptions.retention.occurrences'))];
         $days = config('spyglass.modules.exceptions.retention.resolved_groups');
 
         if (! is_numeric($days)) {
-            return [];
+            return $sources;
         }
 
         $query = Spyglass::connection()->table(self::GROUPS)
@@ -319,9 +259,12 @@ class ExceptionsModule extends Module
         $deleted = 0;
 
         do {
-            $deleted += $batch = $query->delete();
+            $fingerprints = $query->pluck('fingerprint')->all();
+            $deleted += $batch = $fingerprints === [] ? 0 : Spyglass::connection()->table(self::GROUPS)->whereIn('fingerprint', $fingerprints)->delete();
+            // A group recreated later must not inherit their counts.
+            $sources[Sources::TABLE.' (exceptions)'] += app(Sources::class)->forget('exception', $fingerprints);
         } while ($batch === 1000);
 
-        return [self::GROUPS => $deleted];
+        return [self::GROUPS => $deleted, ...$sources];
     }
 }

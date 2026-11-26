@@ -23,6 +23,7 @@ use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Support\JobName;
 use Throwable;
 use WeakMap;
 
@@ -65,7 +66,7 @@ class QueueModule extends Module
             $this->count(
                 $event->connectionName,
                 $this->queueName($event->connectionName, $event->queue),
-                $this->jobName($payload),
+                JobName::from($payload),
                 'queued',
                 config('spyglass.modules.queue.aggregate_by_scope') ? Spyglass::captureContext()['scope'] : null,
             );
@@ -144,21 +145,6 @@ class QueueModule extends Module
     }
 
     /**
-     * The job class, since a custom `displayName()` may embed ids. Framework wrappers (queued listeners,
-     * mailables, notifications, ...) are named after the class they wrap, as their display name is.
-     *
-     * @param  array<string, mixed>  $payload
-     */
-    protected function jobName(array $payload): string
-    {
-        $class = $payload['data']['commandName'] ?? null;
-
-        return is_string($class) && ! str_starts_with($class, 'Illuminate\\')
-            ? $class
-            : (string) ($payload['displayName'] ?? $class ?? $payload['job'] ?? 'unknown');
-    }
-
-    /**
      * Recording must never break the host: an exception in a `JobQueued` listener reaches the dispatching
      * code after the job is stored, and one in `JobFailed` would skip the failer, whose listener runs later.
      *
@@ -233,7 +219,7 @@ class QueueModule extends Module
         Spyglass::upsert(self::FAILED_JOBS, ['uuid' => $uuid], values: [
             'connection' => mb_substr($event->connectionName, 0, 64),
             'queue' => mb_substr($snapshot['queue'], 0, 191),
-            'job' => mb_substr($this->jobName($job->payload()), 0, 255),
+            'job' => mb_substr(JobName::from($job->payload()), 0, 255),
             'attempts' => $job->attempts(),
             'exception_class' => mb_substr($event->exception::class, 0, 255),
             'fingerprint' => ExceptionFingerprint::for($event->exception),
@@ -259,7 +245,7 @@ class QueueModule extends Module
         $this->count(
             $job->getConnectionName(),
             $attempt['queue'],
-            $this->jobName($job->payload()),
+            JobName::from($job->payload()),
             $outcome,
             $attempt['scope'],
             (int) round((hrtime(true) - $attempt['started']) / 1e6),

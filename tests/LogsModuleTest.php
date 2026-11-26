@@ -2,18 +2,23 @@
 
 use Illuminate\Database\QueryException;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
+use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\WithLogsModule;
 use Monolog\Handler\NoopHandler;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
 use Monolog\LogRecord;
+use Symfony\Component\Console\Input\ArgvInput;
 
 uses(WithLogsModule::class);
 
@@ -95,6 +100,35 @@ it('skips records Spyglass writes about its own failures, which still reach the 
     SpyglassFacade::flush();
 
     expect(logEntries())->toHaveCount(1);
+});
+
+it('stores the request and the job a record comes from', function () {
+    Route::get('/orders/{order}', function () {
+        Log::warning('Gateway slow');
+    });
+
+    $this->get('/orders/12?token=secret')->assertOk();
+    dispatch(fn () => Log::warning('Gateway slow'));
+    $uuid = json_decode(DB::table('jobs')->value('payload'), true)['uuid'];
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    SpyglassFacade::flush();
+
+    expect(array_map(fn ($entry) => [$entry['source_type'], $entry['source'], $entry['source_id']], logEntries()))->toBe([
+        ['request', 'GET /orders/{order}?token=***', null],
+        ['job', 'Closure (LogsModuleTest.php:'.(__LINE__ - 7).')', $uuid],
+    ]);
+});
+
+it('throttles each source on its own', function () {
+    Route::get('/checkout', fn () => Log::warning('Gateway slow'));
+    Route::get('/orders', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/checkout?page=1');
+    $this->get('/checkout?page=2');
+    $this->get('/orders');
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'source'))->toBe(['GET /checkout?page=***', 'GET /orders']);
 });
 
 it('stores at most one entry per minute for the same level and message', function () {
@@ -246,6 +280,63 @@ it('keeps the spyglass channel of a stack silent when Spyglass or the logs modul
     'logs module disabled' => [['spyglass.modules.logs.enabled' => false]],
 ]);
 
+it('counts every source of a message, beyond the throttled entries', function () {
+    Route::get('/checkout', function () {
+        Log::warning('Gateway slow');
+        Log::warning('Gateway slow');
+    });
+    Log::warning('Gateway slow');
+
+    $this->get('/checkout?page=1');
+    $this->get('/checkout?page=2');
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(2)
+        ->and(collect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->map(fn ($source) => [$source->source_type, $source->source, (int) $source->count])->all())
+        ->toBe([['request', 'GET /checkout', 4], ['command', (string) (new ArgvInput)->getFirstArgument(), 1]]);
+});
+
+it('keeps routes with optional parameters apart', function () {
+    Route::get('{locale?}/orders', fn () => Log::warning('Gateway slow'));
+    Route::get('{locale?}/users', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/it/orders');
+    $this->get('/it/users');
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'source'))->toBe(['GET /{locale?}/orders', 'GET /{locale?}/users'])
+        ->and(collect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->pluck('source')->sort()->values()->all())
+        ->toBe(['GET /{locale?}/orders', 'GET /{locale?}/users']);
+});
+
+it('keeps long routes with the same beginning apart', function () {
+    $prefix = str_repeat('segment/', 30);
+    Route::get($prefix.'orders', fn () => Log::warning('Gateway slow'));
+    Route::get($prefix.'users', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/'.$prefix.'orders');
+    $this->get('/'.$prefix.'users');
+    SpyglassFacade::flush();
+
+    expect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->toHaveCount(2);
+});
+
+it('keeps counting messages already seen beyond the entry cap', function () {
+    Log::warning('Message 0');
+
+    foreach (range(1, 120) as $i) {
+        Log::warning("Message {$i}");
+    }
+
+    Log::warning('Message 0');
+    Log::warning('Message 120');
+    SpyglassFacade::flush();
+
+    expect((int) app(LogQueries::class)->sources('warning', 'Message 0')[0]->count)->toBe(2)
+        ->and(app(LogQueries::class)->sources('warning', 'Message 120'))->toBe([])
+        ->and(logEntries())->toHaveCount(100);
+});
+
 it('prunes entries older than the retention', function () {
     $this->travelTo(now()->subDays(8));
     Log::error('Old');
@@ -257,7 +348,8 @@ it('prunes entries older than the retention', function () {
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
-    expect(array_column(logEntries(), 'message'))->toBe(['New']);
+    expect(array_column(logEntries(), 'message'))->toBe(['New'])
+        ->and(DB::table(Sources::TABLE)->where('kind', 'log')->count())->toBe(1);
 });
 
 it('restarts the entry cap every minute in processes without lifecycles', function () {

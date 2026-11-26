@@ -25,6 +25,7 @@ use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Support\Sources;
 use ReflectionFunction;
 use RuntimeException;
 use Throwable;
@@ -109,8 +110,16 @@ class ScheduleModule extends Module
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
+            // The process got it already.
+            Context::forgetHidden(Sources::CONTEXT_SOURCE);
+
             if ($task->runInBackground) {
                 Context::forgetHidden(self::CONTEXT_RUN);
+            }
+
+            // Laravel throws on a non-zero exit code right after this event: the exception keeps the task as its source.
+            if ($task->exitCode == 0 || $task->runInBackground) {
+                app(Sources::class)->leaveTask();
             }
 
             if ($id === null || $this->runs[$id]['closed']) {
@@ -122,6 +131,8 @@ class ScheduleModule extends Module
             if (data_get($task, 'skippedBecauseOverlapping', false) || ($task->exitCode === null && ! $task->runInBackground)) {
                 // Laravel fires `ScheduledTaskFailed` next when a stale exit code is not 0: it must not reopen the run.
                 $this->runs[$id]['closed'] = true;
+                // Laravel may still throw on the stale exit code: that exception has no run.
+                app(Sources::class)->forgetRun();
 
                 if (! $this->runs[$id]['quiet']) {
                     $this->deleteRun($id);
@@ -138,9 +149,14 @@ class ScheduleModule extends Module
             $task = $event->task;
             $id = $this->current[$task] ?? null;
 
+            Context::forgetHidden(Sources::CONTEXT_SOURCE);
+
             if ($task->runInBackground) {
                 Context::forgetHidden(self::CONTEXT_RUN);
             }
+
+            // Laravel reports the exception after this event.
+            app(Sources::class)->leaveTask($event->exception);
 
             if ($id !== null && ! $this->runs[$id]['closed']) {
                 $this->close($id, 'failed', $task->exitCode, $this->output($task, $this->runs[$id]['row']['output_offset']), $event->exception);
@@ -369,7 +385,15 @@ class ScheduleModule extends Module
             Spyglass::upsert(self::RUNS, ['id' => $id], $row);
         }
 
-        // Laravel passes the Context to the background process, and `schedule:finish` gets it back.
+        $label = $this->identityOf($task)['label'];
+        app(Sources::class)->enterTask($label, $id);
+
+        // Laravel passes the Context to the process of a command, in the foreground too.
+        if (! $task instanceof CallbackEvent) {
+            Context::addHidden(Sources::CONTEXT_SOURCE, ['source' => $label, 'source_id' => $id]);
+        }
+
+        // `schedule:finish` gets it back.
         if ($task->runInBackground) {
             Context::addHidden(self::CONTEXT_RUN, $id);
         }

@@ -8,6 +8,7 @@ use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Modules\Module;
+use Keepsuit\Spyglass\Support\Sources;
 use Monolog\Logger;
 
 class LogsModule extends Module
@@ -35,5 +36,21 @@ class LogsModule extends Module
         return [
             self::ENTRIES => ['column' => 'logged_at', 'retention' => 'entries'],
         ];
+    }
+
+    /**
+     * Sources of log messages last seen before the `entries` retention.
+     */
+    public function prune(): array
+    {
+        return [Sources::TABLE.' (logs)' => app(Sources::class)->prune('log', config('spyglass.modules.logs.retention.entries'))];
+    }
+
+    /**
+     * The key of a log message among the sources: its level and its stored message.
+     */
+    public static function signature(string $level, string $message): string
+    {
+        return sha1($level.'|'.$message);
     }
 }
