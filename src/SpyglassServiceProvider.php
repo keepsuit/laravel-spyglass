@@ -40,6 +40,7 @@ class SpyglassServiceProvider extends PackageServiceProvider
         $package->hasMigrations([
             'create_spyglass_exceptions_tables',
             'create_spyglass_logs_table',
+            'create_spyglass_sources_table',
         ]);
     }
 

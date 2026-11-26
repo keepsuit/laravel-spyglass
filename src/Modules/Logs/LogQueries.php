@@ -6,6 +6,8 @@ use Carbon\CarbonInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Sources;
+use stdClass;
 
 /**
  * Read side of the logs module. Every query is bounded. Datetimes are UTC strings, as stored.
@@ -13,6 +15,17 @@ use Keepsuit\Spyglass\Spyglass;
 class LogQueries
 {
     public function __construct(protected Spyglass $spyglass) {}
+
+    /**
+     * Where a message came from, most frequent first, with exact counts: entries are throttled.
+     * `$message` is the message as stored.
+     *
+     * @return array<int, stdClass> with `source_type`, `source`, `count` and `last_seen_at`
+     */
+    public function sources(string $level, string $message, int $limit = 100): array
+    {
+        return app(Sources::class)->of('log', LogsModule::signature($level, $message), $limit);
+    }
 
     /**
      * Entries, newest first. `log_context` is JSON cut at 4 KB, so it may not decode.

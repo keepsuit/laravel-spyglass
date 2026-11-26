@@ -9,13 +9,16 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
+use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\WithLogsModule;
 use Monolog\Handler\NoopHandler;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
 use Monolog\LogRecord;
+use Symfony\Component\Console\Input\ArgvInput;
 
 uses(WithLogsModule::class);
 
@@ -277,6 +280,22 @@ it('keeps the spyglass channel of a stack silent when Spyglass or the logs modul
     'logs module disabled' => [['spyglass.modules.logs.enabled' => false]],
 ]);
 
+it('counts every source of a message, beyond the throttled entries', function () {
+    Route::get('/checkout', function () {
+        Log::warning('Gateway slow');
+        Log::warning('Gateway slow');
+    });
+    Log::warning('Gateway slow');
+
+    $this->get('/checkout?page=1');
+    $this->get('/checkout?page=2');
+    SpyglassFacade::flush();
+
+    expect(logEntries())->toHaveCount(2)
+        ->and(collect(app(LogQueries::class)->sources('warning', 'Gateway slow'))->map(fn ($source) => [$source->source_type, $source->source, (int) $source->count])->all())
+        ->toBe([['request', 'GET /checkout', 4], ['command', (string) (new ArgvInput)->getFirstArgument(), 1]]);
+});
+
 it('prunes entries older than the retention', function () {
     $this->travelTo(now()->subDays(8));
     Log::error('Old');
@@ -288,7 +307,8 @@ it('prunes entries older than the retention', function () {
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
-    expect(array_column(logEntries(), 'message'))->toBe(['New']);
+    expect(array_column(logEntries(), 'message'))->toBe(['New'])
+        ->and(DB::table(Sources::TABLE)->where('kind', 'log')->count())->toBe(1);
 });
 
 it('restarts the entry cap every minute in processes without lifecycles', function () {

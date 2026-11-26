@@ -97,6 +97,7 @@ class ExceptionsModule extends Module
 
                 return [
                     'fingerprint' => $fingerprint,
+                    'source' => $source,
                     'group' => ['class' => $this->truncate($e::class, 255), 'message' => $message, 'file' => $this->truncate($file), 'line' => $line],
                     'now' => $now,
                     'occurrence' => $this->throttle->acquire('spyglass:exception:'.sha1($fingerprint.'|'.$source['scope'])) ? [
@@ -128,6 +129,8 @@ class ExceptionsModule extends Module
             max: ['last_seen_at' => $entry['now']],
             min: ['first_seen_at' => $entry['now']],
         );
+
+        app(Sources::class)->count('exception', $entry['fingerprint'], $entry['source']);
 
         if ($entry['occurrence'] !== null) {
             Spyglass::insert(self::OCCURRENCES, $entry['occurrence']);
@@ -198,14 +201,16 @@ class ExceptionsModule extends Module
     }
 
     /**
-     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since.
+     * Groups resolved longer ago than the `resolved_groups` retention, with no occurrence since, and sources
+     * last seen before the `occurrences` one, as their groups are.
      */
     public function prune(): array
     {
+        $sources = [Sources::TABLE.' (exceptions)' => app(Sources::class)->prune('exception', config('spyglass.modules.exceptions.retention.occurrences'))];
         $days = config('spyglass.modules.exceptions.retention.resolved_groups');
 
         if (! is_numeric($days)) {
-            return [];
+            return $sources;
         }
 
         $query = Spyglass::connection()->table(self::GROUPS)
@@ -219,6 +224,6 @@ class ExceptionsModule extends Module
             $deleted += $batch = $query->delete();
         } while ($batch === 1000);
 
-        return [self::GROUPS => $deleted];
+        return [self::GROUPS => $deleted, ...$sources];
     }
 }

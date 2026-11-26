@@ -11,9 +11,11 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Context;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
+use stdClass;
 use Symfony\Component\Console\Input\ArgvInput;
 use Throwable;
 use WeakMap;
@@ -26,6 +28,8 @@ use WeakMap;
  */
 final class Sources
 {
+    public const string TABLE = 'spyglass_sources';
+
     /** Hidden Context key carrying the source of a scheduled task to its background process. */
     public const string CONTEXT_SOURCE = 'spyglass_source';
 
@@ -152,6 +156,65 @@ final class Sources
         return is_array($source) && is_string($source['source'] ?? null)
             ? ['source_type' => 'schedule', 'source' => $source['source'], 'source_id' => is_string($source['source_id'] ?? null) ? $source['source_id'] : null, ...Spyglass::captureContext()]
             : null;
+    }
+
+    /**
+     * Count `$source` for the exception group or log message `$signature`: the origins of each, exactly.
+     *
+     * @param  'exception'|'log'  $kind
+     * @param  array{source_type: string, source: ?string}  $source
+     */
+    public function count(string $kind, string $signature, array $source): void
+    {
+        Spyglass::upsert(self::TABLE, [
+            'kind' => $kind,
+            'signature' => $signature,
+            'source_type' => $source['source_type'],
+            'source' => mb_substr(self::name($source), 0, 191),
+        ], increment: ['count' => 1], max: ['last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]);
+    }
+
+    /**
+     * Rows of `$kind` last seen before `$days` days ago.
+     *
+     * @param  'exception'|'log'  $kind
+     */
+    public function prune(string $kind, mixed $days): int
+    {
+        if (! is_numeric($days)) {
+            return 0;
+        }
+
+        $query = Spyglass::connection()->table(self::TABLE)
+            ->where('kind', $kind)
+            ->where('last_seen_at', '<', Date::now('UTC')->subDays((int) $days)->format('Y-m-d H:i:s.v'))
+            ->limit(1000);
+        $deleted = 0;
+
+        // Short batches keep locks and the transaction log small on large tables.
+        do {
+            $deleted += $batch = $query->delete();
+        } while ($batch === 1000);
+
+        return $deleted;
+    }
+
+    /**
+     * The sources of `$signature`, most frequent first.
+     *
+     * @param  'exception'|'log'  $kind
+     * @return array<int, stdClass> with `source_type`, `source`, `count` and `last_seen_at`
+     */
+    public function of(string $kind, string $signature, int $limit = 100): array
+    {
+        return Spyglass::connection()->table(self::TABLE)
+            ->where('kind', $kind)
+            ->where('signature', $signature)
+            ->orderByDesc('count')
+            ->orderBy('source')
+            ->limit(max(1, min($limit, 1000)))
+            ->get(['source_type', 'source', 'count', 'last_seen_at'])
+            ->all();
     }
 
     /**

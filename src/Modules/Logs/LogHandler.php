@@ -61,27 +61,27 @@ class LogHandler extends AbstractHandler
         }
 
         // Guarded: the cache, the context resolver and objects in the record context run application code that can log in turn.
-        $entry = Spyglass::ignore(function () use ($record, $exception) {
+        $result = Spyglass::ignore(function () use ($record, $exception) {
             try {
                 $exception = $exception instanceof Throwable ? $exception : null;
                 $source = app(Sources::class)->current($exception);
                 // Log entries keep no route name.
                 unset($source['route']);
 
+                // A message can embed the exception's, as Laravel's log of a reported exception does: a query error's carries the bindings.
+                $message = $this->truncate($exception !== null && $exception->getMessage() !== ''
+                    ? str_replace($exception->getMessage(), ExceptionsModule::safeMessage($exception), $record->message)
+                    : $record->message);
+
                 // Per source too: a frequent one must not hide the entries of a task or a job.
-                if (! $this->throttle->acquire('spyglass:log:'.sha1(implode('|', [$record->level->value, $record->message, $source['scope'], $source['source_type'], Sources::name($source)])))) {
-                    return null;
-                }
+                $stored = $this->throttle->acquire('spyglass:log:'.sha1(implode('|', [$record->level->value, $record->message, $source['scope'], $source['source_type'], Sources::name($source)])));
 
                 return [
                     'level' => $record->level->toPsrLogLevel(),
-                    // A message can embed the exception's, as Laravel's log of a reported exception does: a query error's carries the bindings.
-                    'message' => $this->truncate($exception !== null && $exception->getMessage() !== ''
-                        ? str_replace($exception->getMessage(), ExceptionsModule::safeMessage($exception), $record->message)
-                        : $record->message),
-                    'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
-                    'logged_at' => Date::now('UTC')->toDateTimeString(),
-                    ...$source,
+                    'message' => $message,
+                    'source' => $source,
+                    'stored' => $stored,
+                    'log_context' => ! $stored || $record->context === [] ? null : $this->truncate($this->encode($record->context)),
                 ];
             } catch (Throwable $e) {
                 Spyglass::report('Spyglass failed to record a log entry', $e);
@@ -90,9 +90,22 @@ class LogHandler extends AbstractHandler
             }
         });
 
-        if ($entry !== null) {
+        if ($result === null) {
+            return false;
+        }
+
+        // Counted even when throttled, so the sources of a message are exact.
+        app(Sources::class)->count('log', LogsModule::signature($result['level'], $result['message']), $result['source']);
+
+        if ($result['stored']) {
             $this->stored++;
-            Spyglass::insert(LogsModule::ENTRIES, $entry);
+            Spyglass::insert(LogsModule::ENTRIES, [
+                'level' => $result['level'],
+                'message' => $result['message'],
+                'log_context' => $result['log_context'],
+                'logged_at' => Date::now('UTC')->toDateTimeString(),
+                ...$result['source'],
+            ]);
         }
 
         return false;

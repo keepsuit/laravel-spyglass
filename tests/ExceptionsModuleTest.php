@@ -20,6 +20,7 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Tests\Fixtures\ConcurrentException;
 use Keepsuit\Spyglass\Tests\Fixtures\ForwardingExceptionHandler;
 use Keepsuit\Spyglass\Tests\Fixtures\QueueJob;
@@ -587,6 +588,20 @@ it('prunes groups resolved before their retention, unless they occurred again', 
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class]);
 });
 
+it('counts every source of a group, beyond the throttled occurrences', function () {
+    Route::get('/checkout', fn () => throw sameSiteException());
+    Route::get('/orders/{order}', fn () => throw sameSiteException());
+
+    foreach (['/checkout?page=1', '/checkout?page=2', '/checkout', '/orders/12'] as $path) {
+        $this->get($path)->assertServerError();
+    }
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences())->toHaveCount(1)
+        ->and(collect(app(ExceptionQueries::class)->sources(ExceptionFingerprint::for(sameSiteException())))->map(fn ($source) => [$source->source_type, $source->source, (int) $source->count])->all())
+        ->toBe([['request', 'GET /checkout', 3], ['request', 'GET /orders/{order}', 1]]);
+});
+
 it('prunes old occurrences and groups last seen before their retention', function () {
     $this->travelTo(now()->subDays(31));
     reportAndFlush(sameSiteException());
@@ -598,5 +613,6 @@ it('prunes old occurrences and groups last seen before their retention', functio
     $this->artisan('spyglass:prune')->assertSuccessful();
 
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([ExceptionsModuleTestException::class])
-        ->and(exceptionOccurrences())->toHaveCount(1);
+        ->and(exceptionOccurrences())->toHaveCount(1)
+        ->and(DB::table(Sources::TABLE)->where('kind', 'exception')->count())->toBe(1);
 });
