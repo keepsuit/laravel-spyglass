@@ -12,7 +12,6 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Console\Scheduling\ScheduledTaskSkipReason;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Log\Context\ContextServiceProvider;
 use Illuminate\Log\Context\Repository as ContextRepository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -101,12 +100,6 @@ function finishInBackground(Event $task, int $code, ?string $context = null): vo
     } finally {
         unset($_SERVER['__LARAVEL_CONTEXT']);
     }
-}
-
-function contextReachesBackgroundProcesses(): bool
-{
-    // Since Laravel 12.x: `Event` exports the Context to the process and `ContextServiceProvider` restores it.
-    return str_contains((string) file_get_contents((new ReflectionClass(ContextServiceProvider::class))->getFileName()), '__LARAVEL_CONTEXT');
 }
 
 function failingMutex(): EventMutex
@@ -441,7 +434,7 @@ it('closes each overlapping background run with its own outcome', function (bool
 })->with([
     'first started finishes first' => true,
     'last started finishes first' => false,
-])->skip(! contextReachesBackgroundProcesses(), 'Requires Laravel to pass the Context to background processes');
+]);
 
 it('passes the run id to the background process', function () {
     $file = outputFile();
@@ -458,7 +451,7 @@ it('passes the run id to the background process', function () {
 
     expect(unserialize($context['hidden'][ScheduleModule::CONTEXT_RUN] ?? 'N;'))->toBe(scheduleRuns()->first()->id)
         ->and(Context::hasHidden(ScheduleModule::CONTEXT_RUN))->toBeFalse();
-})->skip(! contextReachesBackgroundProcesses(), 'Requires Laravel to pass the Context to background processes');
+});
 
 it('closes a background run once when identical tasks share a mutex', function () {
     $first = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
@@ -471,31 +464,6 @@ it('closes a background run once when identical tasks share a mutex', function (
     finishInBackground($first, 0, $context);
 
     expect(scheduleRuns()->pluck('status', 'task')->all())->toBe([taskKey($first) => 'success', taskKey($second) => 'running']);
-})->skip(! contextReachesBackgroundProcesses(), 'Requires Laravel to pass the Context to background processes');
-
-it('closes a background run without the Context only when it is the only one open on the host', function (int $open) {
-    $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
-
-    foreach (range(1, $open) as $i) {
-        startInBackground($task);
-        $this->travel(1)->minute();
-    }
-
-    finishInBackground($task, 0);
-
-    expect(scheduleRuns()->pluck('status')->all())->toBe($open === 1 ? ['success'] : ['running', 'running']);
-})->with(['one open' => 1, 'two open' => 2]);
-
-it('ignores runs left open longer than the interrupted threshold when closing without the Context', function () {
-    $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
-
-    startInBackground($task);
-    $this->travel(2)->days();
-    startInBackground($task);
-
-    finishInBackground($task, 0);
-
-    expect(scheduleRuns()->pluck('status')->all())->toBe(['running', 'success']);
 });
 
 it('looks up the background run on the write connection', function () {
@@ -514,25 +482,6 @@ it('looks up the background run on the write connection', function () {
     }
 
     expect(scheduleRuns()->pluck('status')->all())->toBe(['success']);
-});
-
-it('closes a background run without the Context only on the host that started it', function () {
-    $task = app(Schedule::class)->exec('true')->runInBackground()->everyMinute();
-
-    startInBackground($task);
-
-    $this->travel(1)->seconds();
-    DB::table(ScheduleModule::RUNS)->insert([
-        'id' => (string) Str::ulid(),
-        'task' => taskKey($task),
-        'started_at' => now('UTC')->format('Y-m-d H:i:s.v'),
-        'status' => 'running',
-        'host' => 'another-host',
-    ]);
-
-    finishInBackground($task, 0);
-
-    expect(scheduleRuns()->pluck('status', 'host')->all())->toBe([gethostname() => 'success', 'another-host' => 'running']);
 });
 
 it('stores the output only when the task writes it', function () {

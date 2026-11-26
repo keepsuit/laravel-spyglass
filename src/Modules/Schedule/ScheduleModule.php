@@ -108,7 +108,7 @@ class ScheduleModule extends Module
                 return;
             }
 
-            // The flag is missing on older Laravel 12 releases, where an overlap skip only leaves the exit
+            // The flag is missing on Laravel 12, where an overlap skip only leaves the exit
             // code null. A failed earlier execution of a sub-minute task leaves it set, so that case is lost.
             if (data_get($task, 'skippedBecauseOverlapping', false) || ($task->exitCode === null && ! $task->runInBackground)) {
                 // Laravel fires `ScheduledTaskFailed` next when a stale exit code is not 0: it must not reopen the run.
@@ -135,7 +135,7 @@ class ScheduleModule extends Module
         });
 
         $this->on(ScheduledTaskSkipped::class, function (ScheduledTaskSkipped $event) {
-            // Missing on older Laravel 12 releases.
+            // Missing on Laravel 12.
             $reason = data_get($event, 'reason');
 
             $this->skip($event->task, $reason instanceof BackedEnum ? (string) $reason->value : null);
@@ -326,32 +326,27 @@ class ScheduleModule extends Module
     }
 
     /**
-     * Close the run that the background process was started for, or, when Laravel does not pass the Context
-     * on, the only one still open for the task on this host. Ambiguous runs stay open and show as interrupted.
+     * Close the run that the background process was started for, whose id Laravel passes on in the Context.
      */
     protected function finishInBackground(Task $task): void
     {
         $this->guard('Spyglass failed to close a background run', function () use ($task) {
             $id = Context::getHidden(self::CONTEXT_RUN);
-            // A replica may not have the start of the run yet.
-            $runs = fn () => Spyglass::connection()->table(self::RUNS)->useWritePdo()->where('status', 'running');
 
-            if (is_string($id)) {
-                $run = $runs()->where('id', $id)->first();
-            } else {
-                // Bounded, so a run left open by a crash does not make every later one ambiguous.
-                $open = $runs()->where('task', $this->identityOf($task)['key'])->where('host', $this->host())
-                    ->where('started_at', '>=', $this->stamp(Date::now()->subSeconds((int) config('spyglass.modules.schedule.interrupted_after', 86400))))
-                    ->limit(2)->get();
-                $run = $open->count() === 1 ? $open->first() : null;
+            if (! is_string($id)) {
+                return;
             }
+
+            // A replica may not have the start of the run yet.
+            $runs = fn () => Spyglass::connection()->table(self::RUNS)->useWritePdo()->where('status', 'running')->where('id', $id);
+            $run = $runs()->first();
 
             if ($run === null) {
                 return;
             }
 
             $run = (array) $run;
-            $runs()->where('id', $run['id'])->update([
+            $runs()->update([
                 'finished_at' => $this->now(),
                 'duration_ms' => max(0, (int) Date::parse($run['started_at'], 'UTC')->diffInMilliseconds(Date::now())),
                 'status' => $task->exitCode === 0 ? 'success' : 'failed',

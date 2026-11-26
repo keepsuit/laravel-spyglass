@@ -27,10 +27,9 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 
 ## Known limitations
 
-- On Laravel versions without the overlap flag, a background run skipped for overlap mid-execution shows as interrupted.
-- On Laravel versions without the overlap flag, a sub-minute task skipped for overlap right after a failed execution can be recorded as failed.
-- On Laravel versions that do not pass the Context to background tasks, `schedule:finish` closes a run only when it is the only one open for the task on the host; overlapping background runs stay open and show as interrupted.
-- On Laravel 12.25 a task skipped by `onOneServer` on the losing host emits no skip event.
+- On Laravel 12, a background run skipped for overlap mid-execution shows as interrupted.
+- On Laravel 12, a sub-minute task skipped for overlap right after a failed execution can be recorded as failed.
+- On Laravel 12, a task skipped by `onOneServer` on the losing host emits no skip event.
 - Concurrent runs appending to the same output file can capture each other's output.
 - During a rolling deploy, a host still running the old code can republish the previous cron expression until it stops.
 - Sub-minute slots are computed as aligned to the start of the minute.
@@ -42,7 +41,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 ## Requirements
 
 - PHP 8.3+
-- Laravel 12.25+ or 13
+- Laravel 12.41+ or 13
 - MySQL/MariaDB, PostgreSQL or SQLite (SQL Server is not supported)
 
 ## Installation
