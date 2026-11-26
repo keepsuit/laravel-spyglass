@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Commands\PruneCommand;
 use Keepsuit\Spyglass\Http\Middleware\Authorize;
+use Keepsuit\Spyglass\Support\Sources;
 use Monolog\Handler\NoopHandler;
 use Monolog\Logger;
 use Spatie\LaravelPackageTools\Package;
@@ -44,6 +45,8 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
     public function packageRegistered(): void
     {
+        $this->app->singleton(Sources::class);
+
         $this->app->singleton(Spyglass::class, function ($app) {
             $config = $app['config'];
             $connection = $config->get('spyglass.storage.connection') ?? $config->get('database.default');
@@ -80,6 +83,9 @@ class SpyglassServiceProvider extends PackageServiceProvider
         if (! config('spyglass.enabled')) {
             return;
         }
+
+        // Before the modules, which read it in their listeners on the same events.
+        $this->app->make(Sources::class)->register();
 
         // Modules first, so their listeners on lifecycle-ending events run before the flush.
         foreach ($spyglass->modules() as $module) {
