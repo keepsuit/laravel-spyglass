@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
+use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Tests\Fixtures\WithScheduleModule;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\NullOutput;
@@ -251,17 +252,23 @@ it('records a non-zero exit code as one failed run', function () {
 
     expect(scheduleRuns())->toHaveCount(1)
         ->and(scheduleRuns()->first()->status)->toBe('failed')
-        ->and(scheduleRuns()->first()->exit_code)->toBe(3);
+        ->and(scheduleRuns()->first()->exit_code)->toBe(3)
+        // Laravel's own exception for an exit code says nothing about the cause.
+        ->and(scheduleRuns()->first()->exception_class)->toBeNull()
+        ->and(scheduleRuns()->first()->fingerprint)->toBeNull();
 });
 
 it('records a throwing closure as a failed run', function () {
-    app(Schedule::class)->call(fn () => throw new RuntimeException('boom'))->everyMinute();
+    $exception = new RuntimeException('boom');
+    app(Schedule::class)->call(fn () => throw $exception)->everyMinute();
 
     $this->artisan('schedule:run');
 
     expect(scheduleRuns())->toHaveCount(1)
         ->and(scheduleRuns()->first()->status)->toBe('failed')
-        ->and(scheduleRuns()->first()->exit_code)->toBe(1);
+        ->and(scheduleRuns()->first()->exit_code)->toBe(1)
+        ->and(scheduleRuns()->first()->exception_class)->toBe(RuntimeException::class)
+        ->and(scheduleRuns()->first()->fingerprint)->toBe(ExceptionFingerprint::for($exception));
 });
 
 it('records a run skipped because it overlaps as a skip of the task, not as a run', function (bool $background) {

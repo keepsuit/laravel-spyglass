@@ -40,6 +40,8 @@ return new class extends Migration
             $table->string('status', 16);
             $table->integer('exit_code')->nullable();
             $table->text('output')->nullable();
+            $table->string('exception_class', 255)->nullable();
+            $table->char('fingerprint', 40)->nullable();
             // Size of an appended output file when the run started: its output is what follows.
             $table->unsignedBigInteger('output_offset')->nullable();
             $table->string('host', 191);

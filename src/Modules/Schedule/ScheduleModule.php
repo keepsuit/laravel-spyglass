@@ -17,12 +17,15 @@ use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event as Task;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Console\Scheduling\ScheduleRunCommand;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
+use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use ReflectionClass;
 use ReflectionFunction;
 use RuntimeException;
 use Throwable;
@@ -130,7 +133,7 @@ class ScheduleModule extends Module
             }
 
             if ($id !== null && ! $this->runs[$id]['closed']) {
-                $this->close($id, 'failed', $task->exitCode, $this->output($task, $this->runs[$id]['row']['output_offset']));
+                $this->close($id, 'failed', $task->exitCode, $this->output($task, $this->runs[$id]['row']['output_offset']), $event->exception);
             }
         });
 
@@ -294,6 +297,8 @@ class ScheduleModule extends Module
             'status' => 'running',
             'exit_code' => null,
             'output' => null,
+            'exception_class' => null,
+            'fingerprint' => null,
             'output_offset' => $offset,
             'host' => $this->host(),
             ...Spyglass::captureContext(),
@@ -309,10 +314,15 @@ class ScheduleModule extends Module
         }
     }
 
-    protected function close(string $id, string $status, ?int $exitCode, ?string $output): void
+    protected function close(string $id, string $status, ?int $exitCode, ?string $output, ?Throwable $exception = null): void
     {
         $run = &$this->runs[$id];
         $run['closed'] = true;
+
+        // Laravel throws its own exception for a non-zero exit code: its fingerprint would group every failing command.
+        if ($exception !== null && $exception->getFile() === (new ReflectionClass(ScheduleRunCommand::class))->getFileName()) {
+            $exception = null;
+        }
 
         // The whole row: the insert half of an upsert must satisfy NOT NULL columns.
         Spyglass::upsert(self::RUNS, ['id' => $id], [
@@ -322,6 +332,8 @@ class ScheduleModule extends Module
             'status' => $status,
             'exit_code' => $exitCode,
             'output' => $output,
+            'exception_class' => $exception === null ? null : mb_substr($exception::class, 0, 255),
+            'fingerprint' => $exception === null ? null : ExceptionFingerprint::for($exception),
         ]);
     }
 
