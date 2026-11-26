@@ -2,10 +2,12 @@
 
 namespace Keepsuit\Spyglass\Modules\Schedule;
 
+use Carbon\CarbonInterface;
+use Closure;
 use Cron\CronExpression;
+use DateTimeInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
@@ -41,13 +43,16 @@ class ScheduleQueries
     public function tasks(): Collection
     {
         $tasks = $this->spyglass->connection()->table(ScheduleModule::TASKS)
+            ->select('*')
+            // Over every task: the newest publication may be beyond the listed ones.
+            ->selectSub(fn (Builder $query) => $query->from(ScheduleModule::TASKS)->selectRaw('max(last_seen_at)'), 'newest')
             ->orderBy('label')
             ->orderBy('key')
             ->limit(self::MAX_TASKS)
             ->get();
 
         $lastRuns = $this->lastRuns($tasks->pluck('key')->all());
-        $newest = $tasks->map(fn (object $task) => $this->date($task->last_seen_at))->max() ?? Date::now();
+        $newest = is_string($tasks->first()?->newest) ? $this->date($tasks->first()->newest) : Date::now();
 
         return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key] ?? null, $newest));
     }
@@ -56,7 +61,7 @@ class ScheduleQueries
      * @param  array<string, mixed>|null  $lastRun
      * @return array<string, mixed>
      */
-    protected function task(stdClass $task, ?array $lastRun, Carbon $newest): array
+    protected function task(stdClass $task, ?array $lastRun, CarbonInterface $newest): array
     {
         $stale = $this->date($task->last_seen_at)->lt($newest->copy()->subSeconds(self::STALE_AFTER));
 
@@ -153,7 +158,7 @@ class ScheduleQueries
     /**
      * @param  array<string, mixed>  $task
      */
-    protected function nextRun(array $task): ?Carbon
+    protected function nextRun(array $task): ?CarbonInterface
     {
         try {
             $cron = new CronExpression($task['expression']);
@@ -169,7 +174,7 @@ class ScheduleQueries
                 }
             }
 
-            return Date::instance($cron->getNextRunDate($now, 0, false, $task['timezone']));
+            return $this->existing($cron, $task['timezone'], fn (int $nth) => $cron->getNextRunDate($now, $nth, false, $task['timezone']));
         } catch (Throwable $e) {
             $this->spyglass->report("Spyglass failed to compute the next run of [{$task['label']}]", $e);
 
@@ -189,7 +194,8 @@ class ScheduleQueries
 
         try {
             $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
-            $slot = Date::instance((new CronExpression($task['expression']))->getPreviousRunDate($due, 0, true, $task['timezone']));
+            $cron = new CronExpression($task['expression']);
+            $slot = $this->existing($cron, $task['timezone'], fn (int $nth) => $cron->getPreviousRunDate($due, $nth, true, $task['timezone']));
         } catch (Throwable $e) {
             $this->spyglass->report("Spyglass failed to compute the due time of [{$task['label']}]", $e);
 
@@ -205,7 +211,26 @@ class ScheduleQueries
         return $slot->gt(max([$this->date($task['first_seen_at']), ...array_map($this->date(...), $satisfied)]));
     }
 
-    protected function date(string $value): Carbon
+    /**
+     * The first of the slots `$nth` returns that Laravel runs: a slot in the hour skipped by a spring-forward
+     * night lands on a later wall-clock time, where Laravel, matching the wall clock, does not run the task.
+     *
+     * @param  Closure(int): DateTimeInterface  $nth
+     */
+    protected function existing(CronExpression $cron, string $timezone, Closure $nth): CarbonInterface
+    {
+        for ($i = 0; $i < 3; $i++) {
+            $slot = Date::instance($nth($i));
+
+            if ($cron->isDue($slot->copy()->setTimezone($timezone)->toDateTimeString())) {
+                return $slot;
+            }
+        }
+
+        return $slot;
+    }
+
+    protected function date(string $value): CarbonInterface
     {
         return Date::parse($value, 'UTC');
     }

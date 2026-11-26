@@ -1,5 +1,6 @@
 <?php
 
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Events\ArtisanStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
@@ -167,6 +168,45 @@ it('shows tasks no longer published as stale, never as missed', function () {
 
     expect(scheduledTask('removed'))->toMatchArray(['stale' => true, 'missed' => false, 'next_run' => null])
         ->and(scheduledTask('current'))->toMatchArray(['stale' => false, 'missed' => true]);
+});
+
+it('detects stale tasks from the newest publication, even beyond the listed tasks', function () {
+    foreach (array_chunk(range(1, 1000), 200) as $chunk) {
+        DB::table(ScheduleModule::TASKS)->insert(array_map(fn (int $i) => [
+            'key' => sha1("removed-{$i}"),
+            'label' => sprintf('a-removed-%04d', $i),
+            'expression' => '* * * * *',
+            'timezone' => 'UTC',
+            'first_seen_at' => '2025-01-01 00:00:00',
+            'last_seen_at' => '2026-01-01 11:00:00',
+        ], $chunk));
+    }
+    insertTask('z-current');
+
+    expect(app(ScheduleQueries::class)->tasks()->first())->toMatchArray(['stale' => true, 'missed' => false]);
+});
+
+it('does not expect a run in the hour skipped by a spring-forward night', function () {
+    // 02:30 does not exist in Rome on 2026-03-29: Laravel never runs the task that day.
+    Date::setTestNow('2026-03-29 06:00:00');
+    insertTask('nightly', '30 2 * * *', ['timezone' => 'Europe/Rome']);
+    insertRun('nightly', '2026-03-28 01:30:00');
+
+    expect(scheduledTask('nightly')['missed'])->toBeFalse()
+        ->and(scheduledTask('nightly')['next_run']->copy()->utc()->toDateTimeString())->toBe('2026-03-30 00:30:00');
+});
+
+it('reads the tasks when the application uses immutable dates', function () {
+    Date::use(CarbonImmutable::class);
+
+    try {
+        insertTask('report');
+        insertRun('report', '2026-01-01 12:00:00');
+
+        expect(scheduledTask('report'))->toMatchArray(['stale' => false, 'missed' => false]);
+    } finally {
+        Date::useDefault();
+    }
 });
 
 it('shows every task as missed, not stale, when the scheduler stopped', function () {
