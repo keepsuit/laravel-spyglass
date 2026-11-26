@@ -213,7 +213,7 @@ it('never breaks the application or the failer when recording fails', function (
 
     $broken = new class(SpyglassFacade::connection()->getName(), 'array') extends Spyglass
     {
-        public function upsert(string $table, array $key, array $values = [], array $increment = [], array $max = []): void
+        public function upsert(string $table, array $key, array $values = [], array $increment = [], array $max = [], array $min = []): void
         {
             throw new RuntimeException('Broken buffer');
         }
