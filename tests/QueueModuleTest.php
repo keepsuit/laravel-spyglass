@@ -2,6 +2,7 @@
 
 use Illuminate\Queue\Events\JobQueued;
 use Illuminate\Queue\Events\JobTimedOut;
+use Illuminate\Queue\QueueManager;
 use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
@@ -157,6 +158,22 @@ it('keeps one series per queue when the worker reports the queue URL', function 
     expect(DB::table(QueueModule::AGGREGATES)->get(['queue', 'queued', 'processed'])->map(fn ($row) => (array) $row)->all())
         ->toBe([['queue' => 'emails', 'queued' => 2, 'processed' => 1]]);
 });
+
+it('names the queue as the app does when the driver stores it elsewhere', function () {
+    Queue::forward('emails', 'emails-v2');
+
+    QueueJob::dispatch('succeed')->onQueue('emails');
+    QueueJob::dispatch('throw')->onQueue('emails');
+    SpyglassFacade::flush();
+
+    for ($i = 0; $i < 2; $i++) {
+        Artisan::call('queue:work', ['connection' => 'database', '--queue' => 'default,emails', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    }
+
+    expect(DB::table(QueueModule::AGGREGATES)->get(['queue', 'queued', 'processed', 'failed'])->map(fn ($row) => (array) $row)->all())
+        ->toBe([['queue' => 'emails', 'queued' => 2, 'processed' => 1, 'failed' => 1]])
+        ->and(queueFailedRows()[0]['queue'])->toBe('emails');
+})->skip(fn () => ! method_exists(QueueManager::class, 'forward'), 'Queue forwards need Laravel 13.');
 
 it('counts a queue given as an enum', function () {
     $payload = json_encode(['displayName' => QueueJob::class, 'job' => 'Illuminate\\Queue\\CallQueuedHandler@call', 'data' => ['commandName' => QueueJob::class]]);

@@ -6,9 +6,11 @@ use Closure;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobPopping;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobQueued;
 use Illuminate\Queue\Events\JobTimedOut;
+use Illuminate\Queue\Events\WorkerStarting;
 use Illuminate\Queue\Failed\DatabaseFailedJobProvider;
 use Illuminate\Queue\Failed\DatabaseUuidFailedJobProvider;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
@@ -16,6 +18,7 @@ use Illuminate\Queue\Failed\FileFailedJobProvider;
 use Illuminate\Queue\Failed\NullFailedJobProvider;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
@@ -38,9 +41,16 @@ class QueueModule extends Module
      * Attempts in progress, until counted. Keyed by the job instance, which is the same object
      * in every event of an attempt, so nested sync jobs and a missed end event cannot leak state.
      *
-     * @var WeakMap<Job, array{started: int|float, scope: ?string, context: ?string}>
+     * @var WeakMap<Job, array{started: int|float, queue: string, scope: ?string, context: ?string}>
      */
     protected WeakMap $attempts;
+
+    /**
+     * The queues this worker was started on, as the app names them.
+     *
+     * @var array{string, string}|null [connection, comma-separated queues]
+     */
+    protected ?array $workerQueues = null;
 
     public function __construct()
     {
@@ -61,10 +71,19 @@ class QueueModule extends Module
             );
         });
 
+        $this->listen(WorkerStarting::class, fn (WorkerStarting $event) => $this->workerQueues = [$event->connectionName, (string) $event->queue]);
+
+        // Carries the queues since Laravel 13, also for `queue:work --once`, which skips `WorkerStarting`.
+        $this->listen(JobPopping::class, function (JobPopping $event) {
+            if (isset($event->queue)) {
+                $this->workerQueues = [$event->connectionName, (string) $event->queue];
+            }
+        });
+
         // Laravel hydrates the Context from the payload before this runs. Tenancy may revert it before the job fails.
         $this->listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
-                $this->attempts[$event->job] = ['started' => hrtime(true), ...Spyglass::captureContext()];
+                $this->attempts[$event->job] = ['started' => hrtime(true), 'queue' => $this->workerQueueName($event->job), ...Spyglass::captureContext()];
             }
         });
 
@@ -100,6 +119,28 @@ class QueueModule extends Module
         $queue = (string) (enum_value($queue) ?? config("queue.connections.{$connection}.queue") ?? 'default');
 
         return filter_var($queue, FILTER_VALIDATE_URL) === false ? $queue : Str::afterLast(rtrim($queue, '/'), '/');
+    }
+
+    /**
+     * Jobs report the queue the driver stores them in: an SQS URL with prefix and suffix, the target of a
+     * queue forward. The worker pops its queues in order, so the first one stored where the job was is its own.
+     */
+    protected function workerQueueName(Job $job): string
+    {
+        $connection = $job->getConnectionName();
+        $stored = $job->getQueue();
+
+        if ($this->workerQueues !== null && $this->workerQueues[0] === $connection) {
+            $queue = Queue::connection($connection);
+
+            foreach (explode(',', $this->workerQueues[1]) as $name) {
+                if ($name === $stored || (method_exists($queue, 'getQueue') && $queue->getQueue($name) === $stored)) {
+                    return $this->queueName($connection, $name);
+                }
+            }
+        }
+
+        return $this->queueName($connection, $stored);
     }
 
     /**
@@ -186,12 +227,12 @@ class QueueModule extends Module
             return;
         }
 
-        $snapshot = $this->attempts[$job] ?? Spyglass::captureContext();
+        $snapshot = $this->attempts[$job] ?? ['queue' => $this->workerQueueName($job), ...Spyglass::captureContext()];
 
         // `queue:retry` keeps the uuid, so a retried job that fails again updates its row.
         Spyglass::upsert(self::FAILED_JOBS, ['uuid' => $uuid], values: [
             'connection' => mb_substr($event->connectionName, 0, 64),
-            'queue' => mb_substr($this->queueName($event->connectionName, $job->getQueue()), 0, 191),
+            'queue' => mb_substr($snapshot['queue'], 0, 191),
             'job' => mb_substr($this->jobName($job->payload()), 0, 255),
             'attempts' => $job->attempts(),
             'exception_class' => mb_substr($event->exception::class, 0, 255),
@@ -217,7 +258,7 @@ class QueueModule extends Module
 
         $this->count(
             $job->getConnectionName(),
-            $this->queueName($job->getConnectionName(), $job->getQueue()),
+            $attempt['queue'],
             $this->jobName($job->payload()),
             $outcome,
             $attempt['scope'],
