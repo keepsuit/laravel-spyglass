@@ -671,7 +671,7 @@ it('keeps only the newest runs of each task by outcome', function () {
         foreach (range(1, 8) as $i) {
             DB::table(ScheduleModule::RUNS)->insert([
                 'id' => (string) Str::ulid(),
-                'task' => $task,
+                'task' => sha1($task),
                 'started_at' => now('UTC')->addMinutes($i)->format('Y-m-d H:i:s.v'),
                 'status' => ['success', 'failed', 'running'][$i % 3],
                 'host' => 'web-1',
@@ -681,9 +681,9 @@ it('keeps only the newest runs of each task by outcome', function () {
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
-    expect(scheduleRuns()->where('task', 'a')->map(fn ($run) => [(int) substr($run->started_at, 14, 2), $run->status])->values()->all())
+    expect(scheduleRuns()->where('task', sha1('a'))->map(fn ($run) => [(int) substr($run->started_at, 14, 2), $run->status])->values()->all())
         ->toBe([[3, 'success'], [5, 'running'], [6, 'success'], [7, 'failed'], [8, 'running']])
-        ->and(scheduleRuns()->where('task', 'b'))->toHaveCount(5);
+        ->and(scheduleRuns()->where('task', sha1('b')))->toHaveCount(5);
 });
 
 it('prunes runs and tasks not seen within the retention', function () {
