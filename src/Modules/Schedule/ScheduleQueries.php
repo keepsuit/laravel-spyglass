@@ -8,6 +8,7 @@ use Cron\CronExpression;
 use DateTimeInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Pagination\Paginator as SimplePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
@@ -54,15 +55,18 @@ class ScheduleQueries
         $lastRuns = $this->lastRuns($tasks->pluck('key')->all());
         $newest = is_string($tasks->first()?->newest) ? $this->date($tasks->first()->newest) : Date::now();
 
-        return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key] ?? null, $newest));
+        return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key][0] ?? null, $lastRuns[$task->key][1] ?? null, $newest));
     }
 
     /**
      * @param  array<string, mixed>|null  $lastRun
+     * @param  array<string, mixed>|null  $previousRun
      * @return array<string, mixed>
      */
-    protected function task(stdClass $task, ?array $lastRun, CarbonInterface $newest): array
+    protected function task(stdClass $task, ?array $lastRun, ?array $previousRun, CarbonInterface $newest): array
     {
+        $overlapping = $lastRun !== null && $this->overlapped($lastRun, $previousRun);
+
         $stale = $this->date($task->last_seen_at)->lt($newest->copy()->subSeconds(self::STALE_AFTER));
 
         if ($lastRun !== null) {
@@ -79,6 +83,7 @@ class ScheduleQueries
                 'duration_ms' => (int) $task->last_duration_ms,
                 'exit_code' => 0,
             ];
+            $overlapping = false;
         }
 
         $task = [
@@ -90,39 +95,82 @@ class ScheduleQueries
             'repeat_seconds' => $task->repeat_seconds === null ? null : (int) $task->repeat_seconds,
             'timezone' => $task->timezone,
             'environments' => $task->environments === null ? [] : (array) json_decode($task->environments, true),
+            'without_overlapping' => (bool) $task->without_overlapping,
             'first_seen_at' => $task->first_seen_at,
             'last_seen_at' => $task->last_seen_at,
             'last_skipped_at' => $task->last_skipped_at,
             'last_skip_reason' => $task->last_skip_reason,
             'stale' => $stale,
             'last_run' => $lastRun,
+            'overlapping' => $overlapping,
         ];
 
         return [...$task, 'next_run' => $stale ? null : $this->nextRun($task), 'missed' => ! $stale && $this->missed($task)];
     }
 
     /**
-     * Runs of a task, newest first. A run still `running` is `interrupted` when a later one started or
-     * when it is older than `interrupted_after`.
+     * Runs of a task, newest first. A run still `running` is `interrupted` when it is older than
+     * `interrupted_after` or, for a task without overlapping, when a later one started. A run is
+     * `overlapped` when it started before the previous one finished: usually a bug, such as a missing
+     * `withoutOverlapping()` or `onOneServer()`.
      *
-     * @return Paginator<int, object>
+     * @return Paginator<int, stdClass>
      */
     public function runs(string $task, int $perPage = 25, int $page = 1): Paginator
     {
-        $runs = $this->runsOf($task)->simplePaginate(max(1, min($perPage, 100)), page: $page);
+        $perPage = max(1, min($perPage, 100));
+        $page = max(1, $page);
 
-        foreach ($runs->items() as $i => $run) {
-            $run->status = $this->status((array) $run, superseded: $page > 1 || $i > 0);
+        // One more: it tells whether there are more pages and whether the last run overlapped it.
+        $rows = $this->runsOf($task)
+            ->select(ScheduleModule::RUNS.'.*')
+            ->selectSub(fn (Builder $query) => $query->from(ScheduleModule::TASKS)->where('key', $task)->select('without_overlapping'), 'without_overlapping')
+            ->offset(($page - 1) * $perPage)
+            ->limit($perPage + 1)
+            ->get()
+            ->all();
+
+        $runs = [];
+
+        foreach (array_slice($rows, 0, $perPage) as $i => $run) {
+            $run->overlapped = $this->overlapped((array) $run, isset($rows[$i + 1]) ? (array) $rows[$i + 1] : null);
+            $run->status = $this->status((array) $run, superseded: (bool) $run->without_overlapping && ($page > 1 || $i > 0));
+            unset($run->without_overlapping);
+            $runs[] = $run;
         }
 
-        return $runs;
+        // The paginator tells there are more pages from an item beyond `$perPage`, which it leaves out.
+        return new SimplePaginator(count($rows) > $perPage ? [...$runs, $rows[$perPage]] : $runs, $perPage, $page);
     }
 
     /**
-     * The newest run of each task: one `LIMIT 1` index lookup per task, in a single query per chunk.
+     * Whether `$run` started while `$previous`, the run before it, was still executing. A run that never
+     * finished counts until `interrupted_after`.
+     *
+     * @param  array<string, mixed>  $run
+     * @param  array<string, mixed>|null  $previous
+     */
+    protected function overlapped(array $run, ?array $previous): bool
+    {
+        if ($previous === null) {
+            return false;
+        }
+
+        $started = $this->date($run['started_at']);
+
+        if ($previous['finished_at'] !== null) {
+            return $this->date($previous['finished_at'])->gt($started);
+        }
+
+        return $previous['status'] === 'running'
+            && $this->date($previous['started_at'])->gt($started->copy()->subSeconds((int) config('spyglass.modules.schedule.interrupted_after', 86400)));
+    }
+
+    /**
+     * The two newest runs of each task, newest first: one `LIMIT 2` index lookup per task, in a single query per chunk.
      *
      * @param  array<mixed>  $keys
-     * @return array<string, array<string, mixed>>
+     * @return array<string, list<array<string, mixed>>>
      */
     protected function lastRuns(array $keys): array
     {
@@ -133,14 +181,20 @@ class ScheduleQueries
 
             foreach ($chunk as $key) {
                 $last = $this->runsOf($key)
-                    ->select(['task', 'status', 'started_at', 'finished_at', 'duration_ms', 'exit_code'])
-                    ->limit(1);
+                    ->select(['id', 'task', 'status', 'started_at', 'finished_at', 'duration_ms', 'exit_code'])
+                    ->limit(2);
                 $query = $query ? $query->unionAll($last) : $last;
             }
 
             foreach ($query->get() as $run) {
-                $runs[$run->task] = (array) $run;
+                $runs[$run->task][] = (array) $run;
             }
+        }
+
+        // A union keeps no order.
+        foreach ($runs as &$pair) {
+            usort($pair, fn (array $a, array $b) => [$this->date($b['started_at']), $b['id']] <=> [$this->date($a['started_at']), $a['id']]);
+            $pair = array_map(fn (array $run) => array_diff_key($run, ['id' => true]), $pair);
         }
 
         return $runs;

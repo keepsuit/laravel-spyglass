@@ -264,6 +264,7 @@ class ScheduleModule extends Module
                     'repeat_seconds' => $task->repeatSeconds,
                     'timezone' => static::timezone($task),
                     'environments' => $task->environments === [] ? null : json_encode(array_values($task->environments)),
+                    'without_overlapping' => $task->withoutOverlapping,
                     'first_seen_at' => $seen,
                     'last_seen_at' => $seen,
                     ...($this->lastSkips[$identity['key']] ?? []),
@@ -273,7 +274,7 @@ class ScheduleModule extends Module
 
             // The same order in every process, so concurrent hosts lock rows in the same sequence.
             ksort($rows, SORT_STRING);
-            $update = ['label', 'command', 'description', 'expression', 'repeat_seconds', 'timezone', 'environments', 'last_seen_at'];
+            $update = ['label', 'command', 'description', 'expression', 'repeat_seconds', 'timezone', 'environments', 'without_overlapping', 'last_seen_at'];
 
             // One statement per column shape: tasks skipped or run in this tick carry those columns too.
             $groups = [];

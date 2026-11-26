@@ -237,6 +237,7 @@ it('shows a run that never finished as interrupted after the threshold', functio
 });
 
 it('shows a running run superseded by a later one as interrupted', function () {
+    insertTask('report', attributes: ['without_overlapping' => true]);
     insertRun('report', '2026-01-01 11:58:00', 'running');
     insertRun('report', '2026-01-01 11:59:00', 'success');
     insertRun('report', '2026-01-01 12:00:00', 'running');
@@ -247,6 +248,30 @@ it('shows a running run superseded by a later one as interrupted', function () {
         ->toBe(['running'])
         ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 3)->items())->pluck('status')->all())
         ->toBe(['interrupted']);
+});
+
+it('keeps an earlier run of a task that may overlap running, and flags the overlap', function () {
+    insertTask('report');
+    insertRun('report', '2026-01-01 11:58:00', 'running');
+    insertRun('report', '2026-01-01 11:59:00', 'running');
+
+    $runs = collect(app(ScheduleQueries::class)->runs(sha1('report'))->items());
+
+    expect($runs->map(fn ($run) => [$run->status, $run->overlapped])->all())->toBe([['running', true], ['running', false]])
+        ->and(scheduledTask('report')['overlapping'])->toBeTrue();
+});
+
+it('flags a run that started before the previous one finished', function () {
+    insertTask('report');
+    DB::table(ScheduleModule::RUNS)->insert([
+        ['id' => (string) Str::ulid(), 'task' => sha1('report'), 'started_at' => '2026-01-01 11:00:00', 'finished_at' => '2026-01-01 11:30:00', 'status' => 'success', 'host' => 'web-1'],
+        ['id' => (string) Str::ulid(), 'task' => sha1('report'), 'started_at' => '2026-01-01 11:10:00', 'finished_at' => '2026-01-01 11:11:00', 'status' => 'success', 'host' => 'web-2'],
+        ['id' => (string) Str::ulid(), 'task' => sha1('report'), 'started_at' => '2026-01-01 12:00:00', 'finished_at' => '2026-01-01 12:00:05', 'status' => 'success', 'host' => 'web-1'],
+    ]);
+
+    expect(collect(app(ScheduleQueries::class)->runs(sha1('report'))->items())->pluck('overlapped')->all())->toBe([false, true, false])
+        ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 2)->items())->pluck('overlapped')->all())->toBe([true])
+        ->and(scheduledTask('report')['overlapping'])->toBeFalse();
 });
 
 it('loads the tasks and their last runs in two bounded queries', function () {
@@ -265,7 +290,7 @@ it('loads the tasks and their last runs in two bounded queries', function () {
 
     expect($queries)->toHaveCount(2)
         ->and($queries[0])->toContain('limit')
-        ->and(substr_count($queries[1], 'limit 1'))->toBe(3)
+        ->and(substr_count($queries[1], 'limit 2'))->toBe(3)
         ->and($tasks->pluck('last_run.status', 'label')->all())->toBe(['a' => 'success', 'b' => 'success', 'c' => 'success']);
 });
 

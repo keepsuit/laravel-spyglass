@@ -139,9 +139,18 @@ it('publishes the schedule on every run, keeping when each task was first seen',
         'environments' => '["production"]',
         'last_skipped_at' => null,
     ])
+        ->and((bool) scheduleTask($task)->without_overlapping)->toBeFalse()
         ->and(substr(scheduleTask($task)->first_seen_at, 11, 5))->toBe('12:00')
         ->and(substr(scheduleTask($task)->last_seen_at, 11, 5))->toBe('12:01')
         ->and(DB::table(ScheduleModule::TASKS)->where('label', 'closure')->value('timezone'))->toBe('Europe/Rome');
+});
+
+it('publishes whether a task prevents overlaps', function () {
+    $task = app(Schedule::class)->exec('true')->everyMinute()->withoutOverlapping();
+
+    publishSchedule();
+
+    expect((bool) scheduleTask($task)->without_overlapping)->toBeTrue();
 });
 
 it('publishes long cron expressions in full', function () {

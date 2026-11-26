@@ -24,6 +24,7 @@ return new class extends Migration
             $table->unsignedSmallInteger('repeat_seconds')->nullable();
             $table->string('timezone', 64);
             $table->json('environments')->nullable();
+            $table->boolean('without_overlapping')->default(false);
             $table->dateTime('first_seen_at', 3);
             $table->dateTime('last_seen_at', 3)->index();
             $table->dateTime('last_skipped_at', 3)->nullable();
