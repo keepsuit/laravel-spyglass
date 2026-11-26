@@ -65,7 +65,7 @@ class ScheduleQueries
      */
     protected function task(stdClass $task, ?array $lastRun, ?array $previousRun, CarbonInterface $newest): array
     {
-        $overlapping = $lastRun !== null && $this->overlapped($lastRun, $previousRun);
+        $overlapping = $lastRun !== null && $this->overlapped($lastRun, $previousRun, (bool) $task->without_overlapping);
 
         $stale = $this->date($task->last_seen_at)->lt($newest->copy()->subSeconds(self::STALE_AFTER));
 
@@ -133,24 +133,24 @@ class ScheduleQueries
         $runs = [];
 
         foreach (array_slice($rows, 0, $perPage) as $i => $run) {
-            $run->overlapped = $this->overlapped((array) $run, isset($rows[$i + 1]) ? (array) $rows[$i + 1] : null);
+            $run->overlapped = $this->overlapped((array) $run, isset($rows[$i + 1]) ? (array) $rows[$i + 1] : null, (bool) $run->without_overlapping);
             $run->status = $this->status((array) $run, superseded: (bool) $run->without_overlapping && ($page > 1 || $i > 0));
             unset($run->without_overlapping);
             $runs[] = $run;
         }
 
         // The paginator tells there are more pages from an item beyond `$perPage`, which it leaves out.
-        return new SimplePaginator(count($rows) > $perPage ? [...$runs, $rows[$perPage]] : $runs, $perPage, $page);
+        return new SimplePaginator(count($rows) > $perPage ? [...$runs, $rows[$perPage]] : $runs, $perPage, $page, ['path' => SimplePaginator::resolveCurrentPath()]);
     }
 
     /**
      * Whether `$run` started while `$previous`, the run before it, was still executing. A run that never
-     * finished counts until `interrupted_after`.
+     * finished counts until `interrupted_after`, unless the task prevents overlaps: then it was interrupted.
      *
      * @param  array<string, mixed>  $run
      * @param  array<string, mixed>|null  $previous
      */
-    protected function overlapped(array $run, ?array $previous): bool
+    protected function overlapped(array $run, ?array $previous, bool $withoutOverlapping): bool
     {
         if ($previous === null) {
             return false;
@@ -162,7 +162,7 @@ class ScheduleQueries
             return $this->date($previous['finished_at'])->gt($started);
         }
 
-        return $previous['status'] === 'running'
+        return ! $withoutOverlapping && $previous['status'] === 'running'
             && $this->date($previous['started_at'])->gt($started->copy()->subSeconds((int) config('spyglass.modules.schedule.interrupted_after', 86400)));
     }
 
@@ -269,7 +269,7 @@ class ScheduleQueries
         }
 
         if ($repeat = $task['repeat_seconds']) {
-            $slot->addSeconds(min(intdiv((int) $slot->diffInSeconds($due), $repeat), intdiv(59, $repeat)) * $repeat);
+            $slot = $slot->addSeconds(min(intdiv((int) $slot->diffInSeconds($due), $repeat), intdiv(59, $repeat)) * $repeat);
         }
 
         $satisfied = array_filter([$task['last_run']['started_at'] ?? null, $task['last_skipped_at']]);
@@ -285,7 +285,8 @@ class ScheduleQueries
      */
     protected function existing(CronExpression $cron, string $timezone, Closure $nth): CarbonInterface
     {
-        for ($i = 0; $i < 3; $i++) {
+        // A skipped hour holds at most 60 slots.
+        for ($i = 0; $i <= 60; $i++) {
             $slot = Date::instance($nth($i));
 
             if ($cron->isDue($slot->copy()->setTimezone($timezone)->toDateTimeString())) {

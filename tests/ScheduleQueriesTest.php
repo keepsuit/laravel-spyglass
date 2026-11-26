@@ -144,7 +144,12 @@ it('computes the due time in the task timezone, across both repeated hours of a 
         ->and(scheduledTask('report')['next_run']->utc()->toDateTimeString())->toBe('2026-10-26 01:30:00');
 });
 
-it('computes the next run and the due time of sub-minute tasks from their interval', function () {
+it('computes the next run and the due time of sub-minute tasks from their interval', function (bool $immutable) {
+    if ($immutable) {
+        Date::use(CarbonImmutable::class);
+        $this->beforeApplicationDestroyed(fn () => Date::useDefault());
+    }
+
     insertTask('poll', '* * * * *', ['repeat_seconds' => 10]);
     insertTask('weekly poll', '* * * * 1', ['repeat_seconds' => 30]);
     insertRun('poll', '2026-01-01 11:59:00');
@@ -160,7 +165,7 @@ it('computes the next run and the due time of sub-minute tasks from their interv
     // Now it is 11:59:10.
     Date::setTestNow('2026-01-01 12:00:41');
     expect(scheduledTask('poll')['missed'])->toBeTrue();
-});
+})->with(['mutable dates' => false, 'immutable dates' => true]);
 
 it('takes the last run of a sub-minute task from the task row when it is newer', function () {
     insertTask('poll', '* * * * *', ['repeat_seconds' => 10, 'last_run_at' => '2026-01-01 12:00:20.000', 'last_duration_ms' => 250]);
@@ -203,6 +208,13 @@ it('does not expect a run in the hour skipped by a spring-forward night', functi
 
     expect(scheduledTask('nightly')['missed'])->toBeFalse()
         ->and(scheduledTask('nightly')['next_run']->copy()->utc()->toDateTimeString())->toBe('2026-03-30 00:30:00');
+
+    // Every slot of the skipped hour, not only the first.
+    Date::setTestNow('2026-03-28 06:00:00');
+    insertTask('quarterly', '*/15 2 * * *', ['timezone' => 'Europe/Rome', 'last_seen_at' => '2026-03-29 06:00:00']);
+
+    expect(scheduledTask('nightly')['next_run']->copy()->utc()->toDateTimeString())->toBe('2026-03-30 00:30:00')
+        ->and(scheduledTask('quarterly')['next_run']->copy()->utc()->toDateTimeString())->toBe('2026-03-30 00:00:00');
 });
 
 it('reads the tasks when the application uses immutable dates', function () {
@@ -242,8 +254,10 @@ it('shows a running run superseded by a later one as interrupted', function () {
     insertRun('report', '2026-01-01 11:59:00', 'success');
     insertRun('report', '2026-01-01 12:00:00', 'running');
 
-    expect(collect(app(ScheduleQueries::class)->runs(sha1('report'))->items())->pluck('status')->all())
-        ->toBe(['running', 'success', 'interrupted'])
+    expect(collect(app(ScheduleQueries::class)->runs(sha1('report'))->items())->map(fn ($run) => [$run->status, $run->overlapped])->all())
+        // A run left behind by a task without overlapping is not an overlap.
+        ->toBe([['running', false], ['success', false], ['interrupted', false]])
+        ->and(scheduledTask('report')['overlapping'])->toBeFalse()
         ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 1)->items())->pluck('status')->all())
         ->toBe(['running'])
         ->and(collect(app(ScheduleQueries::class)->runs(sha1('report'), perPage: 1, page: 3)->items())->pluck('status')->all())

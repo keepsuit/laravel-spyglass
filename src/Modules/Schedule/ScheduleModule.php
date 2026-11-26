@@ -17,7 +17,6 @@ use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event as Task;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Console\Scheduling\ScheduleRunCommand;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
@@ -26,7 +25,6 @@ use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
-use ReflectionClass;
 use ReflectionFunction;
 use RuntimeException;
 use Throwable;
@@ -387,11 +385,6 @@ class ScheduleModule extends Module
             $this->recordLastRun($run['row']['task'], $run['row']['started_at'], $duration);
 
             return;
-        }
-
-        // Laravel throws its own exception for a non-zero exit code: its fingerprint would group every failing command.
-        if ($exception !== null && $exception->getFile() === (new ReflectionClass(ScheduleRunCommand::class))->getFileName()) {
-            $exception = null;
         }
 
         // The whole row: the insert half of an upsert must satisfy NOT NULL columns.
