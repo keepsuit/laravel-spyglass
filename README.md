@@ -25,6 +25,12 @@ Spyglass is a single, lightweight dashboard that gives an overview of a Laravel 
 
 Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an API for custom modules.
 
+## Known limitations
+
+- `Bus::batch()` on the `database` queue driver does not fire `JobQueued`, so the `queued` counter undercounts batched jobs there.
+- On SQLite, a worker timeout inside an open database transaction loses the counters of that attempt.
+- A worker started directly on the target of a queue forward (`Queue::forward('a', 'b')`, worker on `b`) counts the attempts under `b`, while `queued` is counted under `a`.
+
 ## Requirements
 
 - PHP 8.3+

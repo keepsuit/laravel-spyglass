@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static void flush()
  * @method static mixed ignore(\Closure $callback)
  * @method static bool isIgnoring()
+ * @method static void report(string $message, \Throwable $e)
  *
  * @see \Keepsuit\Spyglass\Spyglass
  */

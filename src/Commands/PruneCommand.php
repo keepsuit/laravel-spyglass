@@ -34,6 +34,10 @@ class PruneCommand extends Command
 
                 $this->components->twoColumnDetail($table, "{$deleted} deleted");
             }
+
+            foreach ($module->prune() as $table => $deleted) {
+                $this->components->twoColumnDetail($table, "{$deleted} deleted");
+            }
         }
 
         return self::SUCCESS;

@@ -22,4 +22,14 @@ abstract class Module
     {
         return [];
     }
+
+    /**
+     * Cleanup that retention cannot express, run by `spyglass:prune`.
+     *
+     * @return array<string, int> deleted rows by table
+     */
+    public function prune(): array
+    {
+        return [];
+    }
 }
