@@ -72,9 +72,9 @@ class LogHandler extends AbstractHandler
 
                 return [
                     'level' => $record->level->toPsrLogLevel(),
-                    // Laravel logs a reported exception with its own message: a query error's would carry the bindings.
-                    'message' => $this->truncate($exception instanceof Throwable && $record->message === $exception->getMessage()
-                        ? ExceptionsModule::safeMessage($exception)
+                    // A message can embed the exception's, as Laravel's log of a reported exception does: a query error's carries the bindings.
+                    'message' => $this->truncate($exception instanceof Throwable && $exception->getMessage() !== ''
+                        ? str_replace($exception->getMessage(), ExceptionsModule::safeMessage($exception), $record->message)
                         : $record->message),
                     'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
                     'logged_at' => Date::now('UTC')->toDateTimeString(),

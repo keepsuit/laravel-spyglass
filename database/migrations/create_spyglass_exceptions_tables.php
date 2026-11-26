@@ -22,9 +22,10 @@ return new class extends Migration
             $table->text('file');
             $table->unsignedInteger('line');
             $table->unsignedBigInteger('count')->default(0);
-            $table->dateTime('first_seen_at');
-            $table->dateTime('last_seen_at')->index();
-            $table->dateTime('resolved_at')->nullable();
+            // Milliseconds: an occurrence in the same second as the resolution must still reopen the group.
+            $table->dateTime('first_seen_at', 3);
+            $table->dateTime('last_seen_at', 3)->index();
+            $table->dateTime('resolved_at', 3)->nullable();
 
             $table->index(['class', 'last_seen_at']);
         });
@@ -32,7 +33,7 @@ return new class extends Migration
         Schema::create('spyglass_exception_occurrences', function (Blueprint $table) {
             $table->id();
             $table->char('fingerprint', 40);
-            $table->dateTime('occurred_at')->index();
+            $table->dateTime('occurred_at', 3)->index();
             $table->text('message');
             $table->json('trace');
             $table->string('source_type', 16);

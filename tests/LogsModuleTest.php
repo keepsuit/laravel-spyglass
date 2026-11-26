@@ -10,8 +10,10 @@ use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Tests\Fixtures\WithLogsModule;
-use Monolog\Handler\NullHandler;
+use Monolog\Handler\NoopHandler;
 use Monolog\Handler\TestHandler;
+use Monolog\Level;
+use Monolog\LogRecord;
 
 uses(WithLogsModule::class);
 
@@ -232,9 +234,12 @@ it('keeps the spyglass channel of a stack silent when Spyglass or the logs modul
     $app = $this->bootApplication($config);
 
     $app['log']->channel('stack')->error('Still logged');
+    $handler = $app['log']->channel('spyglass')->getLogger()->getHandlers()[0];
 
     // An unknown driver would add Laravel's emergency file handler, at debug level, in its place.
-    expect(array_map(get_class(...), $app['log']->channel('stack')->getLogger()->getHandlers()))->toBe([TestHandler::class, NullHandler::class])
+    expect(array_map(get_class(...), $app['log']->channel('stack')->getLogger()->getHandlers()))->toBe([TestHandler::class, NoopHandler::class])
+        // Wherever it sits in the stack, it lets the record reach the channels after it.
+        ->and($handler->handle(new LogRecord(new DateTimeImmutable, 'stack', Level::Error, 'Still logged')))->toBeFalse()
         ->and($app['log']->channel('test')->getLogger()->getHandlers()[0]->hasErrorThatContains('Still logged'))->toBeTrue();
 })->with([
     'Spyglass disabled' => [['spyglass.enabled' => false]],
@@ -277,4 +282,14 @@ it('stores query errors without the bindings when the exceptions module is off',
 
     expect(logEntries()[0]['message'])->not->toContain('secret@example.com')
         ->and(logEntries()[0]['log_context'])->not->toContain('secret@example.com');
+});
+
+it('keeps the bindings of a query error out of a message that embeds it', function () {
+    $exception = new QueryException('testing', 'select * from users where email = ?', ['secret@example.com'], new PDOException('boom'));
+
+    Log::error('Database error: '.$exception->getMessage(), ['exception' => $exception]);
+    SpyglassFacade::flush();
+
+    expect(logEntries()[0]['message'])->toStartWith('Database error: SQLSTATE')
+        ->and(logEntries()[0]['message'])->not->toContain('secret@example.com');
 });

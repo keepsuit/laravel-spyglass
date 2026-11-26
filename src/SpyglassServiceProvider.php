@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Commands\PruneCommand;
 use Keepsuit\Spyglass\Http\Middleware\Authorize;
-use Monolog\Handler\NullHandler;
+use Monolog\Handler\NoopHandler;
 use Monolog\Logger;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
@@ -73,7 +73,8 @@ class SpyglassServiceProvider extends PackageServiceProvider
         // Even when disabled: a `stack` listing an unknown driver sends every record to the emergency logger
         // instead of its other channels. The logs module replaces it when enabled.
         $this->callAfterResolving('log', function (LogManager $log) {
-            $log->extend('spyglass', fn () => new Logger('spyglass', [new NullHandler]));
+            // Noop, not Null: a NullHandler stops the record from reaching the channels after it in the stack.
+            $log->extend('spyglass', fn () => new Logger('spyglass', [new NoopHandler]));
         });
 
         if (! config('spyglass.enabled')) {
