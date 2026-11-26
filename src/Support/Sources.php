@@ -30,14 +30,14 @@ final class Sources
     /**
      * The job being processed by a worker, with the Context captured before tenancy can revert it.
      *
-     * @var array{source: string, scope: ?string, context: ?string}|null
+     * @var array{source: string, source_id: ?string, scope: ?string, context: ?string}|null
      */
     private ?array $job = null;
 
     /**
      * The job each exception was thrown by: the worker reports it after the attempt ended.
      *
-     * @var WeakMap<Throwable, array{source: string, scope: ?string, context: ?string}>
+     * @var WeakMap<Throwable, array{source: string, source_id: ?string, scope: ?string, context: ?string}>
      */
     private WeakMap $jobs;
 
@@ -51,7 +51,7 @@ final class Sources
         // Sync jobs run inside the dispatching request or command, which is their source.
         Event::listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
-                $this->job = ['source' => JobName::from($event->job->payload()), ...Spyglass::captureContext()];
+                $this->job = ['source' => JobName::from($event->job->payload()), 'source_id' => $event->job->uuid(), ...Spyglass::captureContext()];
             }
         });
         Event::listen(JobExceptionOccurred::class, function (JobExceptionOccurred $event) {
@@ -70,7 +70,7 @@ final class Sources
     /**
      * The source of an entry recorded now, or of `$exception` when it is reported after its job ended.
      *
-     * @return array{source_type: string, source: ?string, route: ?string, scope: ?string, context: ?string}
+     * @return array{source_type: string, source: ?string, source_id: ?string, route: ?string, scope: ?string, context: ?string}
      */
     public function current(?Throwable $exception = null): array
     {
@@ -87,7 +87,7 @@ final class Sources
 
         // Not `CommandStarting`: Laravel skips it in tests, and fires `CommandFinished` before an uncaught exception is reported.
         if (! $kernel instanceof HttpKernel || $kernel->requestStartedAt() === null) {
-            return ['source_type' => 'command', 'source' => (new ArgvInput)->getFirstArgument(), 'route' => null, ...Spyglass::captureContext()];
+            return ['source_type' => 'command', 'source' => (new ArgvInput)->getFirstArgument(), 'source_id' => null, 'route' => null, ...Spyglass::captureContext()];
         }
 
         /** @var Request $request */
@@ -96,15 +96,26 @@ final class Sources
 
         // The route URI, never the path: path parameters can be tokens or personal data. Before routing there is none.
         if (! $route instanceof Route) {
-            return ['source_type' => 'request', 'source' => $request->getMethod().' (unrouted)', 'route' => null, ...Spyglass::captureContext()];
+            return ['source_type' => 'request', 'source' => $request->getMethod().' (unrouted)', 'source_id' => null, 'route' => null, ...Spyglass::captureContext()];
         }
 
         return [
             'source_type' => 'request',
             'source' => $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/').$this->maskedQuery($request)),
+            'source_id' => null,
             'route' => $route->getName(),
             ...Spyglass::captureContext(),
         ];
+    }
+
+    /**
+     * The source without what varies between its entries, such as the query string of a request: to group by.
+     *
+     * @param  array{source_type: string, source: ?string}  $source
+     */
+    public static function name(array $source): string
+    {
+        return $source['source_type'] === 'request' ? Str::before((string) $source['source'], '?') : (string) $source['source'];
     }
 
     /**

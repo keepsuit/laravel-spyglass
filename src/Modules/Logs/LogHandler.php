@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Modules\Exceptions\Throttle;
+use Keepsuit\Spyglass\Support\Sources;
 use Monolog\Handler\AbstractHandler;
 use Monolog\Level;
 use Monolog\LogRecord;
@@ -60,25 +61,27 @@ class LogHandler extends AbstractHandler
         }
 
         // Guarded: the cache, the context resolver and objects in the record context run application code that can log in turn.
-        $entry = Spyglass::ignore(function () use ($record) {
+        $entry = Spyglass::ignore(function () use ($record, $exception) {
             try {
-                $context = Spyglass::captureContext();
+                $exception = $exception instanceof Throwable ? $exception : null;
+                $source = app(Sources::class)->current($exception);
+                // Log entries keep no route name.
+                unset($source['route']);
 
-                if (! $this->throttle->acquire('spyglass:log:'.sha1($record->level->value.'|'.$record->message.'|'.$context['scope']))) {
+                // Per source too: a frequent one must not hide the entries of a task or a job.
+                if (! $this->throttle->acquire('spyglass:log:'.sha1(implode('|', [$record->level->value, $record->message, $source['scope'], $source['source_type'], Sources::name($source)])))) {
                     return null;
                 }
-
-                $exception = $record->context['exception'] ?? null;
 
                 return [
                     'level' => $record->level->toPsrLogLevel(),
                     // A message can embed the exception's, as Laravel's log of a reported exception does: a query error's carries the bindings.
-                    'message' => $this->truncate($exception instanceof Throwable && $exception->getMessage() !== ''
+                    'message' => $this->truncate($exception !== null && $exception->getMessage() !== ''
                         ? str_replace($exception->getMessage(), ExceptionsModule::safeMessage($exception), $record->message)
                         : $record->message),
                     'log_context' => $record->context === [] ? null : $this->truncate($this->encode($record->context)),
                     'logged_at' => Date::now('UTC')->toDateTimeString(),
-                    ...$context,
+                    ...$source,
                 ];
             } catch (Throwable $e) {
                 Spyglass::report('Spyglass failed to record a log entry', $e);

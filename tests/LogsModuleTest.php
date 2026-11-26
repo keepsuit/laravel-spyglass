@@ -2,10 +2,12 @@
 
 use Illuminate\Database\QueryException;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Spyglass;
@@ -95,6 +97,35 @@ it('skips records Spyglass writes about its own failures, which still reach the 
     SpyglassFacade::flush();
 
     expect(logEntries())->toHaveCount(1);
+});
+
+it('stores the request and the job a record comes from', function () {
+    Route::get('/orders/{order}', function () {
+        Log::warning('Gateway slow');
+    });
+
+    $this->get('/orders/12?token=secret')->assertOk();
+    dispatch(fn () => Log::warning('Gateway slow'));
+    $uuid = json_decode(DB::table('jobs')->value('payload'), true)['uuid'];
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    SpyglassFacade::flush();
+
+    expect(array_map(fn ($entry) => [$entry['source_type'], $entry['source'], $entry['source_id']], logEntries()))->toBe([
+        ['request', 'GET /orders/{order}?token=***', null],
+        ['job', 'Closure (LogsModuleTest.php:'.(__LINE__ - 7).')', $uuid],
+    ]);
+});
+
+it('throttles each source on its own', function () {
+    Route::get('/checkout', fn () => Log::warning('Gateway slow'));
+    Route::get('/orders', fn () => Log::warning('Gateway slow'));
+
+    $this->get('/checkout?page=1');
+    $this->get('/checkout?page=2');
+    $this->get('/orders');
+    SpyglassFacade::flush();
+
+    expect(array_column(logEntries(), 'source'))->toBe(['GET /checkout?page=***', 'GET /orders']);
 });
 
 it('stores at most one entry per minute for the same level and message', function () {

@@ -471,11 +471,13 @@ it('stores the current scope of a job that reports after switching tenant', func
 
 it('names the job after its class, not a display name that can embed ids', function () {
     QueueJob::dispatch('throw', 'Order #12');
+    $uuid = json_decode(DB::table('jobs')->value('payload'), true)['uuid'];
 
     Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
     SpyglassFacade::flush();
 
-    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'source' => QueueJob::class]);
+    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'source' => QueueJob::class])
+        ->and(exceptionOccurrences()[0]['source_id'])->toBe($uuid);
 });
 
 it('stores the console command name, without its arguments', function () {
