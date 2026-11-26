@@ -162,6 +162,15 @@ it('computes the next run and the due time of sub-minute tasks from their interv
     expect(scheduledTask('poll')['missed'])->toBeTrue();
 });
 
+it('takes the last run of a sub-minute task from the task row when it is newer', function () {
+    insertTask('poll', '* * * * *', ['repeat_seconds' => 10, 'last_run_at' => '2026-01-01 12:00:20.000', 'last_duration_ms' => 250]);
+    insertRun('poll', '2026-01-01 11:00:00', 'failed');
+
+    expect(scheduledTask('poll')['last_run'])->toMatchArray(['status' => 'success', 'duration_ms' => 250])
+        ->and(substr(scheduledTask('poll')['last_run']['started_at'], 0, 19))->toBe('2026-01-01 12:00:20')
+        ->and(scheduledTask('poll')['missed'])->toBeFalse();
+});
+
 it('shows tasks no longer published as stale, never as missed', function () {
     insertTask('removed', attributes: ['last_seen_at' => '2026-01-01 11:00:00']);
     insertTask('current');

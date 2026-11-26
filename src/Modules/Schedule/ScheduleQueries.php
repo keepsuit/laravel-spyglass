@@ -69,6 +69,18 @@ class ScheduleQueries
             $lastRun['status'] = $this->status($lastRun, superseded: false);
         }
 
+        // Successful runs of sub-minute tasks are kept only on the task row.
+        if ($task->last_run_at !== null && ($lastRun === null || $this->date($task->last_run_at)->gt($this->date($lastRun['started_at'])))) {
+            $lastRun = [
+                'task' => $task->key,
+                'status' => 'success',
+                'started_at' => $task->last_run_at,
+                'finished_at' => null,
+                'duration_ms' => (int) $task->last_duration_ms,
+                'exit_code' => 0,
+            ];
+        }
+
         $task = [
             'key' => $task->key,
             'label' => $task->label,

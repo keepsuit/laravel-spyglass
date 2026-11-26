@@ -28,6 +28,9 @@ return new class extends Migration
             $table->dateTime('last_seen_at', 3)->index();
             $table->dateTime('last_skipped_at', 3)->nullable();
             $table->string('last_skip_reason', 32)->nullable();
+            // Successful runs of sub-minute tasks are not rows: only the last one, here.
+            $table->dateTime('last_run_at', 3)->nullable();
+            $table->unsignedInteger('last_duration_ms')->nullable();
         });
 
         Schema::create('spyglass_schedule_runs', function (Blueprint $table) {

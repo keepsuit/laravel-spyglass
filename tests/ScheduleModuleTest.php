@@ -308,6 +308,43 @@ it('keeps an overlap skip of a sub-minute task after a failed execution', functi
         ->and(scheduleTask($task)->last_skip_reason)->toBe('overlapping');
 })->skip(! property_exists(Event::class, 'skippedBecauseOverlapping'), 'Requires the overlap flag');
 
+it('keeps only the last successful run of a sub-minute task, on the task row', function () {
+    $task = app(Schedule::class)->call(fn () => null)->name('poll')->everyTenSeconds();
+    publishSchedule();
+
+    $writes = 0;
+    Spyglass::connection()->listen(function (QueryExecuted $query) use (&$writes) {
+        $writes += str_starts_with(strtolower($query->sql), 'update') ? 1 : 0;
+    });
+
+    publishSchedule(function () use ($task) {
+        foreach (range(0, 50, 10) as $second) {
+            $this->travelTo(now()->setTime(12, 1, $second));
+            event(new ScheduledTaskStarting($task));
+            $task->exitCode = 0;
+            event(new ScheduledTaskFinished($task, 0.0));
+        }
+    });
+
+    expect(scheduleRuns())->toHaveCount(0)
+        ->and(substr(scheduleTask($task)->last_run_at, 11, 8))->toBe('12:01:50')
+        ->and(scheduleTask($task)->last_duration_ms)->not->toBeNull()
+        // At 12:01:00 and 12:01:30; the publication writes the last one.
+        ->and($writes)->toBe(2);
+});
+
+it('records every failed run of a sub-minute task', function () {
+    $task = app(Schedule::class)->call(fn () => throw new RuntimeException('boom'))->name('poll')->everyTenSeconds();
+    publishSchedule();
+
+    event(new ScheduledTaskStarting($task));
+    $task->exitCode = 1;
+    event(new ScheduledTaskFailed($task, new RuntimeException('boom'), 0.0));
+
+    expect(scheduleRuns()->pluck('status')->all())->toBe(['failed'])
+        ->and(scheduleTask($task)->last_run_at)->toBeNull();
+});
+
 it('records a task skipped by its filters on the task row', function () {
     $task = app(Schedule::class)->call(fn () => null)->name('filtered')->everyMinute()->when(false);
 

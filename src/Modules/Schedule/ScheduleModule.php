@@ -35,7 +35,8 @@ use WeakMap;
  * The scheduler publishes its task list at the end of every `schedule:run` and records one row per execution, keyed by
  * an id generated when the task starts: every write of a run is an upsert on it, so the buffered `running`
  * row (flushed at `ScheduledTaskStarting`) and its closing write are the same row. Skips are not runs: they
- * only update the task row.
+ * only update the task row. Neither are successful runs of sub-minute tasks: up to 86,400 a day, so only
+ * the last one is kept on the task row, and only failed ones become rows.
  */
 class ScheduleModule extends Module
 {
@@ -48,14 +49,14 @@ class ScheduleModule extends Module
     /** Hidden Context key carrying the run id to the `schedule:finish` process of a background task. */
     public const string CONTEXT_RUN = 'spyglass_schedule_run';
 
-    /** Sub-minute tasks are skipped every few seconds: one write per task within this many seconds. */
-    protected const int SKIP_WRITE_INTERVAL = 30;
+    /** Sub-minute tasks are skipped or run every few seconds: one write per task within this many seconds. */
+    protected const int TASK_WRITE_INTERVAL = 30;
 
     /**
      * Runs started by this process, by run id. Not by task: Laravel reuses the task object for every
      * execution of a sub-minute task.
      *
-     * @var array<string, array{row: array<string, mixed>, started: int|float, closed: bool}>
+     * @var array<string, array{row: array<string, mixed>, started: int|float, closed: bool, quiet: bool}>
      */
     protected array $runs = [];
 
@@ -70,6 +71,12 @@ class ScheduleModule extends Module
 
     /** @var array<string, array{last_skipped_at: string, last_skip_reason: ?string}> last skip of each task key in this tick */
     protected array $lastSkips = [];
+
+    /** @var array<string, int> when the last successful run of a sub-minute task was written, per task key */
+    protected array $runWrites = [];
+
+    /** @var array<string, array{last_run_at: string, last_duration_ms: int}> last successful sub-minute run of each task key in this tick */
+    protected array $lastRuns = [];
 
     /** When the current `schedule:run` started: the time its publication reports. */
     protected ?CarbonInterface $tick = null;
@@ -116,7 +123,11 @@ class ScheduleModule extends Module
             if (data_get($task, 'skippedBecauseOverlapping', false) || ($task->exitCode === null && ! $task->runInBackground)) {
                 // Laravel fires `ScheduledTaskFailed` next when a stale exit code is not 0: it must not reopen the run.
                 $this->runs[$id]['closed'] = true;
-                $this->deleteRun($id);
+
+                if (! $this->runs[$id]['quiet']) {
+                    $this->deleteRun($id);
+                }
+
                 $this->skip($task, 'overlapping');
             } elseif (! $task->runInBackground) {
                 $this->close($id, $task->exitCode === 0 ? 'success' : 'failed', $task->exitCode, $this->output($task, $this->runs[$id]['row']['output_offset']));
@@ -256,6 +267,7 @@ class ScheduleModule extends Module
                     'first_seen_at' => $seen,
                     'last_seen_at' => $seen,
                     ...($this->lastSkips[$identity['key']] ?? []),
+                    ...($this->lastRuns[$identity['key']] ?? []),
                 ];
             }
 
@@ -263,16 +275,23 @@ class ScheduleModule extends Module
             ksort($rows, SORT_STRING);
             $update = ['label', 'command', 'description', 'expression', 'repeat_seconds', 'timezone', 'environments', 'last_seen_at'];
 
-            foreach ([false, true] as $skipped) {
-                $group = array_filter($rows, fn (array $row) => array_key_exists('last_skip_reason', $row) === $skipped);
+            // One statement per column shape: tasks skipped or run in this tick carry those columns too.
+            $groups = [];
+
+            foreach ($rows as $row) {
+                $groups[implode(',', array_keys($row))][] = $row;
+            }
+
+            foreach ($groups as $group) {
+                $columns = [...$update, ...array_diff(array_keys($group[0]), [...$update, 'key', 'first_seen_at'])];
 
                 foreach (array_chunk($group, 80) as $chunk) {
-                    Spyglass::connection()->table(self::TASKS)
-                        ->upsert($chunk, ['key'], $skipped ? [...$update, 'last_skipped_at', 'last_skip_reason'] : $update);
+                    Spyglass::connection()->table(self::TASKS)->upsert($chunk, ['key'], $columns);
                 }
             }
 
             $this->lastSkips = [];
+            $this->lastRuns = [];
         });
     }
 
@@ -304,9 +323,15 @@ class ScheduleModule extends Module
             ...Spyglass::captureContext(),
         ];
 
+        // A background run needs its row: `schedule:finish` closes it in another process.
+        $quiet = $task->isRepeatable() && ! $task->runInBackground;
+
         $this->current[$task] = $id;
-        $this->runs[$id] = ['row' => $row, 'started' => hrtime(true), 'closed' => false];
-        Spyglass::upsert(self::RUNS, ['id' => $id], $row);
+        $this->runs[$id] = ['row' => $row, 'started' => hrtime(true), 'closed' => false, 'quiet' => $quiet];
+
+        if (! $quiet) {
+            Spyglass::upsert(self::RUNS, ['id' => $id], $row);
+        }
 
         // Laravel passes the Context to the background process, and `schedule:finish` gets it back.
         if ($task->runInBackground) {
@@ -318,6 +343,13 @@ class ScheduleModule extends Module
     {
         $run = &$this->runs[$id];
         $run['closed'] = true;
+        $duration = (int) round((hrtime(true) - $run['started']) / 1e6);
+
+        if ($run['quiet'] && $status === 'success') {
+            $this->recordLastRun($run['row']['task'], $run['row']['started_at'], $duration);
+
+            return;
+        }
 
         // Laravel throws its own exception for a non-zero exit code: its fingerprint would group every failing command.
         if ($exception !== null && $exception->getFile() === (new ReflectionClass(ScheduleRunCommand::class))->getFileName()) {
@@ -328,7 +360,7 @@ class ScheduleModule extends Module
         Spyglass::upsert(self::RUNS, ['id' => $id], [
             ...$run['row'],
             'finished_at' => $this->now(),
-            'duration_ms' => (int) round((hrtime(true) - $run['started']) / 1e6),
+            'duration_ms' => $duration,
             'status' => $status,
             'exit_code' => $exitCode,
             'output' => $output,
@@ -368,6 +400,24 @@ class ScheduleModule extends Module
         });
     }
 
+    /**
+     * Record the last successful run of a sub-minute task on its row. The tick publication writes the last one in any case.
+     */
+    protected function recordLastRun(string $key, string $startedAt, int $duration): void
+    {
+        $this->lastRuns[$key] = ['last_run_at' => $startedAt, 'last_duration_ms' => $duration];
+        $now = Date::now()->getTimestamp();
+
+        if ($now - ($this->runWrites[$key] ?? PHP_INT_MIN) < self::TASK_WRITE_INTERVAL) {
+            return;
+        }
+
+        $this->guard('Spyglass failed to record the last run of a scheduled task', function () use ($key, $now) {
+            Spyglass::connection()->table(self::TASKS)->where('key', $key)->update($this->lastRuns[$key]);
+            $this->runWrites[$key] = $now;
+        });
+    }
+
     protected function deleteRun(string $id): void
     {
         $this->guard('Spyglass failed to delete a skipped run', fn () => Spyglass::connection()->table(self::RUNS)->where('id', $id)->delete());
@@ -389,7 +439,7 @@ class ScheduleModule extends Module
             $last = $this->skips[$key] ?? null;
             $this->lastSkips[$key] = ['last_skipped_at' => $this->now(), 'last_skip_reason' => $reason];
 
-            if ($last !== null && $last['reason'] === $reason && $now - $last['at'] < self::SKIP_WRITE_INTERVAL) {
+            if ($last !== null && $last['reason'] === $reason && $now - $last['at'] < self::TASK_WRITE_INTERVAL) {
                 return;
             }
 
