@@ -2,6 +2,7 @@
 
 namespace Keepsuit\Spyglass\Modules\Exceptions;
 
+use Illuminate\Cache\DatabaseStore;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Throwable;
@@ -50,8 +51,24 @@ final class Throttle
         try {
             $cache = Spyglass::cache();
 
-            // A store that keeps nothing, such as `null`, can never add: the process limit alone applies.
-            return $cache->add($key, true, self::SECONDS) || ! $cache->has($key);
+            // A failing query on the application's connection would abort its open transaction on PostgreSQL.
+            if ($cache->getStore() instanceof DatabaseStore) {
+                return true;
+            }
+
+            if ($cache->add($key, true, self::SECONDS)) {
+                return true;
+            }
+
+            if ($cache->has($key)) {
+                return false;
+            }
+
+            // Expired since the add: take it now, so other processes wait. A store that keeps nothing, such as
+            // `null`, can never add: the process limit alone applies.
+            $cache->add($key, true, self::SECONDS);
+
+            return true;
         } catch (Throwable $e) {
             $this->cacheDownUntil = $now + self::SECONDS;
             Spyglass::report('Spyglass failed to throttle through the cache', $e);

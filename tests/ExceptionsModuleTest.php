@@ -2,6 +2,7 @@
 
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Exceptions\Handler;
@@ -30,6 +31,14 @@ uses(WithExceptionsModule::class);
 
 class ExceptionsModuleTestException extends RuntimeException {}
 
+class ThrowingBeforeRouting
+{
+    public function handle(): never
+    {
+        throw new RuntimeException('Before routing');
+    }
+}
+
 /**
  * Every exception built here has the same fingerprint.
  */
@@ -38,14 +47,22 @@ function sameSiteException(string $message = 'Boom'): RuntimeException
     return new RuntimeException($message);
 }
 
+/**
+ * Datetimes to the second: drivers differ in how they return the milliseconds.
+ */
+function toSeconds(object $row): array
+{
+    return array_map(fn ($value) => is_string($value) && preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/', $value) ? substr($value, 0, 19) : $value, (array) $row);
+}
+
 function exceptionGroup(): array
 {
-    return (array) DB::table(ExceptionsModule::GROUPS)->sole();
+    return toSeconds(DB::table(ExceptionsModule::GROUPS)->sole());
 }
 
 function exceptionOccurrences(): array
 {
-    return DB::table(ExceptionsModule::OCCURRENCES)->orderBy('id')->get()->map(fn ($row) => (array) $row)->all();
+    return DB::table(ExceptionsModule::OCCURRENCES)->orderBy('id')->get()->map(toSeconds(...))->all();
 }
 
 function reportAndFlush(Throwable $e): void
@@ -173,6 +190,19 @@ it('keeps the first seen time and moves the last seen time', function () {
     ]);
 });
 
+it('reopens a group on an occurrence later in the same second as its resolution', function () {
+    $fingerprint = ExceptionFingerprint::for(sameSiteException());
+
+    $this->travelTo('2026-03-01 10:00:00.100');
+    reportAndFlush(sameSiteException());
+    app(ExceptionQueries::class)->resolve($fingerprint);
+
+    $this->travelTo('2026-03-01 10:00:00.400');
+    reportAndFlush(sameSiteException());
+
+    expect(app(ExceptionQueries::class)->groups(['status' => 'unresolved'])->items())->toHaveCount(1);
+});
+
 it('reopens a resolved group on an occurrence newer than the resolution, even when stored late', function () {
     $fingerprint = ExceptionFingerprint::for(sameSiteException());
     $queries = app(ExceptionQueries::class);
@@ -188,7 +218,7 @@ it('reopens a resolved group on an occurrence newer than the resolution, even wh
 
     SpyglassFacade::flush();
 
-    expect($queries->group($fingerprint))->toMatchObject(['resolved_at' => '2026-03-01 10:02:00', 'count' => 2])
+    expect(toSeconds($queries->group($fingerprint)))->toMatchArray(['resolved_at' => '2026-03-01 10:02:00', 'count' => 2])
         ->and($queries->groups(['status' => 'resolved'])->items())->toHaveCount(1);
 
     $this->travelTo('2026-03-01 10:03:00');
@@ -302,6 +332,17 @@ it('does not record exceptions reported by application code it runs while record
     expect(DB::table(ExceptionsModule::GROUPS)->pluck('class')->all())->toBe([RuntimeException::class]);
 });
 
+it('stores neither the path nor the query string of a request not routed yet', function () {
+    // A global middleware runs before routing.
+    app(HttpKernel::class)->pushMiddleware(ThrowingBeforeRouting::class);
+    Route::get('/reset/{token}', fn () => 'ok');
+
+    $this->get('/reset/private-token?email=a@b.c')->assertServerError();
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'request', 'source' => 'GET (unrouted)', 'route' => null]);
+});
+
 it('stores the request with query string values masked, except allowlisted keys', function () {
     config()->set('spyglass.modules.exceptions.query_allowlist', ['page']);
     Route::get('/orders/{order}', fn () => throw sameSiteException())->name('orders.show');
@@ -408,6 +449,23 @@ it('stores the job and its scope, captured before tenancy reverts the context', 
         'scope' => 'tenant:acme',
     ])
         ->and(json_decode(exceptionOccurrences()[0]['context'], true))->toBe(['tenant_id' => 'acme']);
+});
+
+it('stores the current scope of a job that reports after switching tenant', function () {
+    config()->set('spyglass.context.keys', ['tenant_id']);
+    SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? "tenant:{$context['tenant_id']}" : null);
+
+    Context::add('tenant_id', 'acme');
+    dispatch(function () {
+        Context::add('tenant_id', 'other');
+        report(new RuntimeException('Switched'));
+    });
+    Context::forget('tenant_id');
+
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    SpyglassFacade::flush();
+
+    expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'scope' => 'tenant:other']);
 });
 
 it('stores the console command name, without its arguments', function () {

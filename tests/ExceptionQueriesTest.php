@@ -54,6 +54,9 @@ it('lists groups last seen first, with filters', function (array $filters, array
     'class' => [['class' => LogicException::class], ['b']],
     'scope' => [['scope' => 'tenant:other'], ['c', 'b']],
     'combined' => [['scope' => 'tenant:other', 'status' => 'unresolved'], ['c']],
+    // Falsy, still a filter.
+    'scope "0"' => [['scope' => '0'], []],
+    'class "0"' => [['class' => '0'], []],
 ]);
 
 it('paginates groups', function () {
@@ -80,7 +83,7 @@ it('resolves and reopens a group', function () {
 
     expect(exceptionQueries()->resolve(str_repeat('a', 40)))->toBeTrue()
         ->and(exceptionQueries()->resolve(str_repeat('a', 40)))->toBeFalse()
-        ->and(exceptionQueries()->group(str_repeat('a', 40))->resolved_at)->toBe('2026-03-05 08:00:00')
+        ->and(substr(exceptionQueries()->group(str_repeat('a', 40))->resolved_at, 0, 19))->toBe('2026-03-05 08:00:00')
         ->and(exceptionQueries()->unresolve(str_repeat('a', 40)))->toBeTrue()
         ->and(exceptionQueries()->unresolve(str_repeat('a', 40)))->toBeFalse()
         ->and(exceptionQueries()->group(str_repeat('a', 40))->resolved_at)->toBeNull();

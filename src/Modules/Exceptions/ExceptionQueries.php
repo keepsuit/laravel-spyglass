@@ -26,11 +26,12 @@ class ExceptionQueries
         $groups = $this->spyglass->connection()->table(ExceptionsModule::GROUPS)
             ->when(($filters['status'] ?? null) === 'unresolved', fn (Builder $query) => $this->whereUnresolved($query))
             ->when(($filters['status'] ?? null) === 'resolved', fn (Builder $query) => $this->whereResolved($query))
-            ->when($filters['class'] ?? null, fn (Builder $query, string $class) => $query->where('class', $class))
-            ->when($filters['scope'] ?? null, fn (Builder $query, string $scope) => $query->whereExists(
+            // `isset`, not truthiness: '0' is a valid class or scope filter.
+            ->when(isset($filters['class']), fn (Builder $query) => $query->where('class', $filters['class'] ?? null))
+            ->when(isset($filters['scope']), fn (Builder $query) => $query->whereExists(
                 fn (Builder $occurrences) => $occurrences->from(ExceptionsModule::OCCURRENCES)
                     ->whereColumn(ExceptionsModule::OCCURRENCES.'.fingerprint', ExceptionsModule::GROUPS.'.fingerprint')
-                    ->where('scope', $scope),
+                    ->where('scope', $filters['scope'] ?? null),
             ))
             ->orderByDesc('last_seen_at')
             ->orderByDesc('id')
@@ -73,7 +74,7 @@ class ExceptionQueries
     public function resolve(string $fingerprint): bool
     {
         return $this->whereUnresolved($this->spyglass->connection()->table(ExceptionsModule::GROUPS)->where('fingerprint', $fingerprint))
-            ->update(['resolved_at' => Date::now('UTC')->toDateTimeString()]) > 0;
+            ->update(['resolved_at' => Date::now('UTC')->format('Y-m-d H:i:s.v')]) > 0;
     }
 
     public function unresolve(string $fingerprint): bool

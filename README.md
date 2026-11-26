@@ -43,7 +43,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 - A worker started directly on the target of a queue forward (`Queue::forward('a', 'b')`, worker on `b`) counts the attempts under `b`, while `queued` is counted under `a`.
 - Exceptions with their own `report()` method, or stopped by an application `reportable` callback registered earlier (returning `false` or calling `stop()`), are not recorded.
 - A manual `Log::error(..., ['exception' => $e])` after `report($e)` is skipped as already recorded.
-- With a `database` cache store, the throttle write can join an open application transaction: at worst one extra stored occurrence or log entry.
+- With a `database` cache store, occurrences and log entries are throttled per process only, so several processes can store the same one in a minute: a cache query inside an open transaction could abort it on PostgreSQL.
 
 ## Requirements
 

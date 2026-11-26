@@ -134,7 +134,7 @@ class ExceptionsModule extends Module
             try {
                 $fingerprint = ExceptionFingerprint::for($e);
                 [$file, $line] = ExceptionFingerprint::location($e);
-                $now = Date::now('UTC')->toDateTimeString();
+                $now = Date::now('UTC')->format('Y-m-d H:i:s.v');
                 $message = $this->message($e);
                 $source = $this->source($e);
 
@@ -209,7 +209,10 @@ class ExceptionsModule extends Module
         $job = $this->jobs[$e] ?? $this->job;
 
         if ($job !== null) {
-            return ['source_type' => 'job', 'route' => null, ...$job];
+            // The snapshot covers tenancy reverting the context before the failure is reported, not a job that switched tenant.
+            $current = Spyglass::captureContext();
+
+            return ['source_type' => 'job', 'route' => null, ...$job, ...($current['scope'] !== null ? $current : [])];
         }
 
         $kernel = app()->resolved(HttpKernelContract::class) ? app(HttpKernelContract::class) : null;
@@ -222,13 +225,16 @@ class ExceptionsModule extends Module
         /** @var Request $request */
         $request = app('request');
         $route = $request->route();
-        // The route URI, not the path: path parameters can be tokens or personal data.
-        $path = $route instanceof Route ? '/'.ltrim($route->uri(), '/') : $request->getPathInfo();
+
+        // The route URI, never the path: path parameters can be tokens or personal data. Before routing there is none.
+        if (! $route instanceof Route) {
+            return ['source_type' => 'request', 'source' => $request->getMethod().' (unrouted)', 'route' => null, ...Spyglass::captureContext()];
+        }
 
         return [
             'source_type' => 'request',
-            'source' => $this->truncate($request->getMethod().' '.$path.$this->maskedQuery($request)),
-            'route' => $route instanceof Route ? $route->getName() : null,
+            'source' => $this->truncate($request->getMethod().' /'.ltrim($route->uri(), '/').$this->maskedQuery($request)),
+            'route' => $route->getName(),
             ...Spyglass::captureContext(),
         ];
     }
