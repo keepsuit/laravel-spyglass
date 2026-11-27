@@ -176,6 +176,11 @@ it('describes the overview of the enabled modules', function () {
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('archive'), 'started_at' => '2026-01-01 00:00:00', 'status' => 'success', 'host' => 'web-1',
     ]);
+    apiTask('zeta');
+    DB::table(ScheduleModule::TASKS)->where('label', 'zeta')->update(['expression' => '20 12 * * *']);
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('zeta'), 'started_at' => '2026-03-01 12:20:00', 'status' => 'success', 'host' => 'web-1',
+    ]);
     // The queue module joins after boot, without its listeners: the index row is written here.
     DB::table(QueueModule::FAILED_JOBS)->insert([
         'uuid' => $uuid = 'u-1', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
@@ -204,8 +209,8 @@ it('describes the overview of the enabled modules', function () {
         ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
         ->and(array_column(apiWidget($page, 'latest_logs')['rows'], 'message'))->toBe(['Disk full'])
         ->and(apiWidget($page, 'logs')['widgets'][0])->toMatchArray(['key' => 'recorded', 'style' => 'bars'])
-        // Tasks by their latest run, newest first.
-        ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'archive'])
+        // Those needing attention first, then by their latest run.
+        ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'zeta', 'archive'])
         ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
 
     // Every link and "more" leads to a page of the API.

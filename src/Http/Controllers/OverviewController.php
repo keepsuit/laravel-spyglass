@@ -77,12 +77,14 @@ class OverviewController extends Controller
         if (isset($modules['schedule'])) {
             $tasks = app(ScheduleQueries::class)->tasks()
                 ->map(ScheduleController::flatten(...))
-                ->reject(fn (array $task) => $task['stale']);
-            $attention = $tasks->filter(fn (array $task) => $task['missed'] || in_array($task['last_status'], ['failed', 'interrupted'], true))->count();
+                ->reject(fn (array $task) => $task['stale'])
+                ->map(fn (array $task) => [...$task, 'attention' => $task['missed'] || in_array($task['last_status'], ['failed', 'interrupted'], true)]);
+            $attention = $tasks->where('attention', true)->count();
 
             $metrics[] = Widget::metric('tasks_attention', 'Tasks needing attention', $attention, link: 'schedule', tone: $attention === 0 ? 'ok' : 'warning');
+            // Those needing attention first, then the latest run.
             $groups['schedule'] = Widget::group('schedule', 'Schedule', [
-                Widget::table('tasks', 'Latest runs', [
+                Widget::table('tasks', 'Tasks', [
                     Widget::field('label', 'Task'),
                     Widget::field('last_status', 'Last run', 'status', ScheduleController::TONES),
                     Widget::field('recent', 'Recent runs', 'runs', ScheduleController::TONES),
@@ -90,7 +92,7 @@ class OverviewController extends Controller
                     Widget::field('last_duration_ms', 'Duration', 'duration'),
                     Widget::field('next_run', 'Next run', 'datetime'),
                     Widget::field('missed', 'Missed', 'boolean'),
-                ], $tasks->sortByDesc(fn (array $task) => $task['last_started_at'] ?? '')->take(self::LISTED)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
+                ], $tasks->sort(fn (array $a, array $b) => [$b['attention'], $b['last_started_at'] ?? ''] <=> [$a['attention'], $a['last_started_at'] ?? ''])->take(self::LISTED)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
             ], more: 'schedule');
         }
 
