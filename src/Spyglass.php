@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use Keepsuit\Spyglass\Modules\Health\HealthModule;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
@@ -40,6 +41,7 @@ class Spyglass
         'queue' => QueueModule::class,
         'exceptions' => ExceptionsModule::class,
         'logs' => LogsModule::class,
+        'health' => HealthModule::class,
     ];
 
     /** @var array<string, list<array<string, mixed>>> */
@@ -80,6 +82,16 @@ class Spyglass
     public function cache(): CacheRepository
     {
         return Cache::store($this->cacheStore);
+    }
+
+    public function connectionName(): string
+    {
+        return $this->connection;
+    }
+
+    public function cacheStore(): string
+    {
+        return $this->cacheStore;
     }
 
     /**

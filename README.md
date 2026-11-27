@@ -21,7 +21,7 @@ Spyglass is a single, lightweight dashboard that gives an overview of a Laravel 
 - **Queues**: processed, failed, released and timed out counters per queue and job class, pending/running/delayed sizes, failed jobs with retry and delete.
 - **Exceptions**: grouped by fingerprint, with occurrences, first and last seen, resolve and reopen on regression.
 - **Logs**: a `spyglass` log channel that stores `warning` and above.
-- **Health**: database and cache connectivity, queue sizes, debug mode, runtime versions, deployed commit.
+- **Health**: database and cache connectivity, pending jobs per queue, debug mode in production, PHP, Laravel and package versions, deployed version (`APP_VERSION`).
 
 Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an API for custom modules.
 

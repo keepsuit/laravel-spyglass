@@ -170,11 +170,11 @@ class ExceptionsModule extends Module
     public static function safeMessage(Throwable $e): string
     {
         if ($e instanceof QueryException) {
-            return "SQLSTATE[{$e->getCode()}]: {$e->getSql()}";
+            return 'SQLSTATE['.self::sqlState($e)."]: {$e->getSql()}";
         }
 
         if ($e instanceof PDOException) {
-            return "SQLSTATE[{$e->getCode()}]";
+            return 'SQLSTATE['.self::sqlState($e).']';
         }
 
         $message = $e->getMessage();
@@ -187,6 +187,18 @@ class ExceptionsModule extends Module
         }
 
         return $message;
+    }
+
+    /**
+     * The code of a connection error is the driver's (e.g. MySQL 2002), not the SQLSTATE.
+     */
+    protected static function sqlState(QueryException|PDOException $e): string
+    {
+        if (is_string($e->errorInfo[0] ?? null)) {
+            return $e->errorInfo[0];
+        }
+
+        return preg_match('/^SQLSTATE\[(\w+)]/', $e->getMessage(), $match) ? $match[1] : (string) $e->getCode();
     }
 
     protected function userId(): ?string

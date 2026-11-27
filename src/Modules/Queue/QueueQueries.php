@@ -104,17 +104,28 @@ class QueueQueries
         return collect($this->spyglass->cache()->remember(
             'spyglass:queue:sizes:'.intdiv($since->getTimestamp(), 300),
             5,
-            fn () => $this->spyglass->connection()->table(QueueModule::AGGREGATES)
-                ->where('scope', '')
-                ->where('bucket', '>=', $this->utc($since))
-                ->distinct()
-                ->orderBy('connection')
-                ->orderBy('queue')
-                ->limit(self::MAX_QUEUES)
-                ->get(['connection', 'queue'])
-                ->map(fn (object $row) => $this->queueSizes($row->connection, $row->queue))
+            fn () => $this->queues($since)
+                ->map(fn (array $queue) => $this->queueSizes($queue['connection'], $queue['queue']))
                 ->all(),
         ));
+    }
+
+    /**
+     * Queues seen since `$since`.
+     *
+     * @return Collection<int, array{connection: string, queue: string}>
+     */
+    public function queues(CarbonInterface $since): Collection
+    {
+        return $this->spyglass->connection()->table(QueueModule::AGGREGATES)
+            ->where('scope', '')
+            ->where('bucket', '>=', $this->utc($since))
+            ->distinct()
+            ->orderBy('connection')
+            ->orderBy('queue')
+            ->limit(self::MAX_QUEUES)
+            ->get(['connection', 'queue'])
+            ->map(fn (object $row) => ['connection' => (string) $row->connection, 'queue' => (string) $row->queue]);
     }
 
     /**
