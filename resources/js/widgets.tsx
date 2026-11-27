@@ -96,7 +96,7 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
         case 'link': {
             const link = value as { label: string; url: string | null };
             return link.url ? (
-                <Link to={link.url} className="link break-words text-info">
+                <Link to={link.url} className="link break-words text-accent-ink">
                     {breakable(link.label)}
                 </Link>
             ) : (
@@ -223,7 +223,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                 <div className="flex items-center gap-4">
                     {pagination?.total != null && <span className="text-muted tabular-nums">{formatNumber(pagination.total)} total</span>}
                     {widget.more && (
-                        <Link to={widget.more} className="link font-medium text-info pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
+                        <Link to={widget.more} className="link font-medium text-accent-ink pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
                             View all
                         </Link>
                     )}

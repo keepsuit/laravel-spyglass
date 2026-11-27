@@ -33,7 +33,7 @@ function App() {
         <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">
             <aside className="border-b border-line bg-surface md:sticky md:top-0 md:h-screen md:border-r md:border-b-0">
                 <div className="flex items-center gap-2 px-4 pt-4 pb-2 md:px-6 md:pt-7 md:pb-6">
-                    <svg viewBox="0 0 24 24" className="size-5 text-brass" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" className="size-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                         <circle cx="7" cy="17" r="4" />
                         <path d="M10 14 20 4M14 6l4 4" />
                     </svg>
@@ -46,7 +46,7 @@ function App() {
                             to={module.key}
                             aria-current={module.key === current ? 'page' : undefined}
                             className={`flex min-h-11 items-center rounded-lg px-3 whitespace-nowrap transition-colors duration-150 md:min-h-9 ${
-                                module.key === current ? 'bg-bg font-semibold text-ink shadow-[inset_2px_0_0_var(--brass)]' : 'text-muted hover:bg-bg/70 hover:text-ink'
+                                module.key === current ? 'bg-bg font-semibold text-ink shadow-[inset_2px_0_0_var(--accent)]' : 'text-muted hover:bg-bg/70 hover:text-ink'
                             }`}
                         >
                             {module.label}
@@ -57,9 +57,7 @@ function App() {
             <main className="min-w-0 px-4 py-5 md:px-10 md:py-8">
                 {modules.error ? (
                     <Problem error={modules.error} />
-                ) : path === '' ? (
-                    !modules.isPending && list.length === 0 && <p className="text-muted">All modules are disabled in config/spyglass.php.</p>
-                ) : (
+                ) : path === '' ? null : (
                     <Page key={path} path={path} search={search} module={list.find((module) => module.key === current)} />
                 )}
             </main>
@@ -137,6 +135,7 @@ function Page({ path, search, module }: { path: string; search: string; module?:
             ) : (
                 <NoticeContext value={setNotice}>
                     {query.error && <Problem error={query.error} />}
+                    {page?.widgets.length === 0 && <p className={`${card} px-4 py-6 text-muted`}>Nothing to show: the modules behind this page are disabled.</p>}
                     {page && <div className="grid gap-5 lg:grid-cols-2">{renderWidgets(page, ignored, active.length > 0, pageParam ? Number(pageParam) : null)}</div>}
                 </NoticeContext>
             )}
@@ -262,7 +261,7 @@ function Problem({ error, back }: { error: Error; back?: Module }) {
         <div role="alert" className={`${card} border-error/30 px-4 py-4`}>
             <p className="font-medium text-error">{error.message}</p>
             {back && (
-                <Link to={back.key} className="link mt-1 inline-block text-info">
+                <Link to={back.key} className="link mt-1 inline-block text-accent-ink">
                     Back to {back.label}
                 </Link>
             )}
