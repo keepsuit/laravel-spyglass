@@ -78,8 +78,8 @@ class DatabaseSeeder extends Seeder
         $jobs = [['default', 'App\Jobs\SyncCatalog', 6], ['emails', 'App\Mail\InvoiceIssued', 14], ['default', 'App\Jobs\GenerateThumbnails', 3]];
         $rows = [];
 
-        // Five-minute buckets over the last day, busier during the day.
-        for ($b = 0; $b < 288; $b++) {
+        // Five-minute buckets over the last two days, busier during the day: the older day is the previous period.
+        for ($b = 0; $b < 576; $b++) {
             $bucket = $this->now->copy()->subMinutes($b * 5);
             $bucket->setTimestamp($bucket->getTimestamp() - $bucket->getTimestamp() % 300);
 
@@ -88,7 +88,7 @@ class DatabaseSeeder extends Seeder
                     continue;
                 }
 
-                $processed = (int) round($rate * (0.4 + 0.6 * sin(((int) $bucket->format('G') - 6) / 24 * 2 * M_PI) ** 2) + $b * 13 % 5);
+                $processed = (int) round($rate * ($b < 288 ? 1 : 0.85) * (0.4 + 0.6 * sin(((int) $bucket->format('G') - 6) / 24 * 2 * M_PI) ** 2) + $b * 13 % 5);
                 $failed = ($b * 31 + $rate) % 23 === 0 ? 1 + $b % 3 : 0;
 
                 $rows[] = [
@@ -157,11 +157,13 @@ class DatabaseSeeder extends Seeder
                 ]);
             }
 
-            for ($o = 0; $o < min(6, $count); $o++) {
+            // Spread over the day, with a burst of the noisiest group a few hours ago.
+            for ($o = 0; $o < min(40, $count); $o++) {
                 $tenant = $o % 2 ? 'north' : 'south';
+                $minutes = $count > 100 && $o % 3 === 0 ? 300 + $o : $o * 1400 / min(40, $count);
 
                 DB::table('spyglass_entries')->insert([
-                    'kind' => 'exception', 'signature' => $fingerprint, 'recorded_at' => $this->at($last->copy()->subMinutes($o * 37)), 'message' => $message,
+                    'kind' => 'exception', 'signature' => $fingerprint, 'recorded_at' => $this->at($last->copy()->subMinutes((int) $minutes)), 'message' => $message,
                     'body' => json_encode([['file' => $file, 'line' => $line, 'function' => 'handle'], ['file' => 'vendor/laravel/framework/src/Illuminate/Container/BoundMethod.php', 'line' => 36, 'function' => '{closure}']]),
                     'source_type' => $o % 3 ? 'job' : 'request', 'source' => $o % 3 ? 'App\Jobs\SyncCatalog' : 'POST /checkout',
                     'user_id' => $o % 3 ? null : '1042', 'scope' => "tenant:{$tenant}", 'context' => json_encode(['tenant_id' => $tenant]),

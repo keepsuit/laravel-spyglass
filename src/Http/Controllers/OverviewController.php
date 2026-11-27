@@ -7,6 +7,7 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleQueries;
+use Keepsuit\Spyglass\Support\Hourly;
 
 /**
  * The home page: what needs attention in each enabled module. Health is left out: its checks can take
@@ -54,7 +55,9 @@ class OverviewController extends Controller
             $failed = $queries->failedJobs(perPage: self::LISTED);
 
             $metrics[] = Widget::metric('failed_jobs_total', 'Failed jobs', $failed->total(), link: 'queue', tone: $failed->total() > 0 ? 'error' : 'ok');
-            $metrics[] = Widget::metric('processed_jobs', 'Jobs processed in 24h', $totals['processed'] ?? 0, link: 'queue');
+            $previous = app(QueueController::class)->previousTotals($from, now());
+
+            $metrics[] = Widget::metric('processed_jobs', 'Jobs processed in 24h', $totals['processed'] ?? 0, link: 'queue', previous: $previous['processed'] ?? null);
             $charts[] = Widget::series('throughput', 'Queue throughput in 24h', 'bucket', [
                 ['key' => 'processed', 'label' => QueueController::COUNTERS['processed']],
                 ['key' => 'failed', 'label' => QueueController::COUNTERS['failed']],
@@ -65,6 +68,15 @@ class OverviewController extends Controller
                 Widget::field('exception_class', 'Exception'),
                 Widget::field('failed_at', 'Failed at', 'datetime'),
             ], $this->rows($failed->items()), link: 'queue/failed-jobs/{uuid}', more: 'queue', empty: 'No failed jobs.', width: 'half');
+        }
+
+        if (isset($modules['exceptions'])) {
+            $charts[] = Widget::series('exceptions_per_hour', 'Exceptions per hour', 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
+                app(ExceptionQueries::class)->hourly(Hourly::start(24)), style: 'bars', note: ExceptionsController::NOTE, width: 'half');
+        }
+
+        if (isset($modules['logs'])) {
+            $charts[] = LogsController::chart(app(LogQueries::class)->hourly(Hourly::start(24)), width: 'half');
         }
 
         if (isset($modules['schedule'])) {

@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Hourly;
 use Keepsuit\Spyglass\Support\Sources;
 use stdClass;
 
@@ -51,6 +52,18 @@ class LogQueries
             ->orderByDesc('recorded_at')
             ->orderByDesc('id')
             ->simplePaginate(max(1, min($perPage, 100)), page: $page);
+    }
+
+    /**
+     * Recorded entries per hour and level since `$from`, as `Hourly::counts()`. Throttled: at most one a
+     * minute per message, scope and source.
+     *
+     * @param  array{level?: string, scope?: string}  $filters
+     * @return list<array<string, mixed>>
+     */
+    public function hourly(CarbonInterface $from, array $filters = []): array
+    {
+        return Hourly::counts('log', $from, fn (Builder $query) => $query->where(array_intersect_key($filters, array_flip(['level', 'scope']))), by: 'level');
     }
 
     /**

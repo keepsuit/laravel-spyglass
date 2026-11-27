@@ -150,13 +150,30 @@ function Heading({ label, ignored, children }: { label: string; ignored: string[
 }
 
 const dots: Record<Tone, string> = { ok: 'bg-ok', info: 'bg-info', warning: 'bg-warning', error: 'bg-error' };
+const deltaTones = { ok: 'text-ok', error: 'text-error' };
+const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+const signed = new Intl.NumberFormat(undefined, { signDisplay: 'exceptZero' });
+
+/** Change against the previous period: a percentage, or the difference when there was nothing before. */
+export function change(value: unknown, previous?: number, better?: 'up' | 'down'): { text: string; tone: 'ok' | 'error' | null } | null {
+    if (typeof value !== 'number' || previous === undefined) return null;
+
+    const diff = value - previous;
+    if (diff === 0) return { text: 'No change', tone: null };
+
+    return {
+        text: previous === 0 ? signed.format(diff) : percent.format(diff / previous),
+        tone: better ? ((diff > 0) === (better === 'up') ? 'ok' : 'error') : null,
+    };
+}
 
 /** Consecutive metrics share one row. A linked metric opens its page. */
 export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored: (filters: string[]) => string[] }) {
     return (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(11rem,1fr))]">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))]">
             {metrics.map((metric) => {
                 const notes = ignored(metric.filters);
+                const delta = change(metric.value, metric.previous, metric.better);
                 const body = (
                     <>
                         <div className="flex items-start gap-2 text-muted">
@@ -168,8 +185,14 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
                                 metric.tone === 'error' ? 'text-error' : metric.tone === 'warning' ? 'text-warning' : ''
                             }`}
                         >
-                            {metric.value === null ? '–' : formatNumber(metric.value)}
+                            {metric.value === null ? '–' : metric.format === 'duration' && typeof metric.value === 'number' ? formatDuration(metric.value) : formatNumber(metric.value)}
                         </div>
+                        {delta && (
+                            <div className="mt-2 text-xs">
+                                <div className={`font-medium tabular-nums ${delta.tone ? deltaTones[delta.tone] : ''}`}>{delta.text}</div>
+                                <div className="text-muted">vs previous period</div>
+                            </div>
+                        )}
                         {notes.length > 0 && <div className="mt-2 text-xs text-muted">Not filtered by {notes.join(', ')}</div>}
                     </>
                 );
@@ -327,7 +350,10 @@ export function Details({ widget }: { widget: DetailsWidget }) {
 const height = 200;
 const pad = { top: 12, right: 12, bottom: 24, left: 44 };
 
-/** Lines over time. Missing points between the first and the last count as zero, at the smallest step between points. */
+/**
+ * Lines over time, or stacked bars with `style: 'bars'`. Missing points between the first and the last count as
+ * zero, at the smallest step between points.
+ */
 export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: string[] }) {
     const [hover, setHover] = useState<number | null>(null);
     // Drawn at the width it is shown at, so labels keep their size on a phone.
@@ -340,22 +366,35 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
         observer.observe(frame.current);
         return () => observer.disconnect();
     }, [widget.points.length > 0]);
+    const bars = widget.style === 'bars';
     const points = densify(widget);
-    const max = Math.max(1, ...points.flatMap((point) => widget.lines.map((line) => Number(point.values[line.key]) || 0)));
+    const value = (point: { values: Row }, key: string) => Number(point.values[key]) || 0;
+    const peak = (point: { values: Row }) => {
+        const values = widget.lines.map((line) => value(point, line.key));
+        return bars ? values.reduce((sum, v) => sum + v, 0) : Math.max(0, ...values);
+    };
+    // Even, so the middle gridline falls on a whole number.
+    const max = 2 * Math.ceil(Math.max(1, ...points.map(peak)) / 2);
     const first = points[0]?.time ?? 0;
     const span = Math.max(1, (points.at(-1)?.time ?? 0) - first);
-    const x = (time: number) => pad.left + ((time - first) / span) * (width - pad.left - pad.right);
+    const plot = width - pad.left - pad.right;
+    const slot = plot / Math.max(1, points.length);
+    // Bars sit in equal slots, lines on the time axis.
+    const x = (index: number) => (bars ? pad.left + (index + 0.5) * slot : pad.left + ((points[index].time - first) / span) * plot);
     const y = (value: number) => height - pad.bottom - (value / max) * (height - pad.top - pad.bottom);
     const active = hover === null ? null : points[hover];
-    const colour = (index: number) => `var(--series-${(index % 8) + 1})`;
-    const line = (key: string) => points.map((point) => `${x(point.time)},${y(Number(point.values[key]) || 0)}`).join(' ');
+    const colour = (index: number) => {
+        const tone = widget.lines[index]?.tone;
+        return tone ? `var(--${tone})` : `var(--series-${(index % 8) + 1})`;
+    };
+    const line = (key: string) => points.map((point, index) => `${x(index)},${y(value(point, key))}`).join(' ');
 
     const onMove = (event: MouseEvent<SVGSVGElement>) => {
         const box = event.currentTarget.getBoundingClientRect();
-        const time = first + ((((event.clientX - box.left) / box.width) * width - pad.left) / (width - pad.left - pad.right)) * span;
+        const at = ((event.clientX - box.left) / box.width) * width;
         let nearest = 0;
-        points.forEach((point, index) => {
-            if (Math.abs(point.time - time) < Math.abs(points[nearest].time - time)) nearest = index;
+        points.forEach((_, index) => {
+            if (Math.abs(x(index) - at) < Math.abs(x(nearest) - at)) nearest = index;
         });
         setHover(nearest);
     };
@@ -366,12 +405,13 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
                 <ul className="flex flex-wrap gap-x-4 gap-y-1 text-muted">
                     {widget.lines.map((item, index) => (
                         <li key={item.key} className="flex items-center gap-1.5">
-                            <span className="h-0.5 w-3 rounded" style={{ background: colour(index) }} />
+                            <span className={bars ? 'size-2 rounded-sm' : 'h-0.5 w-3 rounded'} style={{ background: colour(index) }} />
                             {item.label}
                         </li>
                     ))}
                 </ul>
             </Heading>
+            {widget.note && <p className="-mt-2 px-4 pb-2 text-xs text-muted">{widget.note}</p>}
             {points.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">Nothing recorded in this range.</p>
             ) : (
@@ -388,48 +428,74 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
                             <g key={ratio}>
                                 <line x1={pad.left} x2={width - pad.right} y1={y(max * ratio)} y2={y(max * ratio)} stroke="var(--line)" strokeDasharray={ratio ? '2 4' : undefined} />
                                 <text x={pad.left - 8} y={y(max * ratio) + 4} textAnchor="end" fontSize="11" fill="var(--muted)">
-                                    {formatNumber(Math.round(max * ratio))}
+                                    {formatNumber(max * ratio)}
                                 </text>
                             </g>
                         ))}
-                        {[points[0], points.at(-1)!].map((point, index) => (
-                            <text key={index} x={x(point.time)} y={height - 6} textAnchor={index ? 'end' : 'start'} fontSize="11" fill="var(--muted)">
-                                {formatShort(point.time)}
+                        {[0, points.length - 1].map((index, end) => (
+                            <text
+                                key={end}
+                                x={bars ? x(index) + ((end ? 1 : -1) * slot) / 2 : x(index)}
+                                y={height - 6}
+                                textAnchor={end ? 'end' : 'start'}
+                                fontSize="11"
+                                fill="var(--muted)"
+                            >
+                                {formatShort(points[index].time)}
                             </text>
                         ))}
-                        {widget.lines.length > 0 && (
-                            <polygon
-                                fill={colour(0)}
-                                fillOpacity="0.08"
-                                points={`${x(first)},${y(0)} ${line(widget.lines[0].key)} ${x(points.at(-1)!.time)},${y(0)}`}
-                            />
+                        {bars && hover !== null && <rect x={x(hover) - slot / 2} y={pad.top} width={slot} height={height - pad.top - pad.bottom} fill="var(--line)" opacity="0.5" />}
+                        {bars &&
+                            points.flatMap((point, index) => {
+                                let base = 0;
+                                return widget.lines.map((item, lineIndex) => {
+                                    const v = value(point, item.key);
+                                    const top = y(base + v);
+                                    const bottom = y(base);
+                                    base += v;
+                                    return v ? (
+                                        <rect
+                                            key={`${index}-${item.key}`}
+                                            x={x(index) - slot * 0.35}
+                                            y={top}
+                                            width={Math.max(1, slot * 0.7)}
+                                            height={bottom - top}
+                                            fill={colour(lineIndex)}
+                                            rx={Math.min(2, slot * 0.15)}
+                                        />
+                                    ) : null;
+                                });
+                            })}
+                        {!bars && widget.lines.length > 0 && (
+                            <polygon fill={colour(0)} fillOpacity="0.08" points={`${x(0)},${y(0)} ${line(widget.lines[0].key)} ${x(points.length - 1)},${y(0)}`} />
                         )}
-                        {widget.lines.map((item, index) => (
-                            <polyline
-                                key={item.key}
-                                fill="none"
-                                stroke={colour(index)}
-                                strokeWidth="2"
-                                strokeLinejoin="round"
-                                vectorEffect="non-scaling-stroke"
-                                points={line(item.key)}
-                            />
-                        ))}
-                        {active && <line x1={x(active.time)} x2={x(active.time)} y1={pad.top} y2={height - pad.bottom} stroke="var(--muted)" strokeDasharray="3 3" />}
+                        {!bars &&
+                            widget.lines.map((item, index) => (
+                                <polyline
+                                    key={item.key}
+                                    fill="none"
+                                    stroke={colour(index)}
+                                    strokeWidth="2"
+                                    strokeLinejoin="round"
+                                    vectorEffect="non-scaling-stroke"
+                                    points={line(item.key)}
+                                />
+                            ))}
+                        {!bars && hover !== null && <line x1={x(hover)} x2={x(hover)} y1={pad.top} y2={height - pad.bottom} stroke="var(--muted)" strokeDasharray="3 3" />}
                     </svg>
-                    {active && (
+                    {active && hover !== null && (
                         <div
                             className="pointer-events-none absolute top-0 rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg shadow-ink/5"
-                            style={x(active.time) > width / 2 ? { right: `${(1 - x(active.time) / width) * 100 + 2}%` } : { left: `${(x(active.time) / width) * 100 + 2}%` }}
+                            style={x(hover) > width / 2 ? { right: `${(1 - x(hover) / width) * 100 + 2}%` } : { left: `${(x(hover) / width) * 100 + 2}%` }}
                         >
                             <div className="mb-1 font-medium">{formatDate(new Date(active.time).toISOString())}</div>
                             {widget.lines.map((item, index) => (
                                 <div key={item.key} className="flex items-center justify-between gap-4">
                                     <span className="flex items-center gap-1.5 text-muted">
-                                        <span className="size-2 rounded-full" style={{ background: colour(index) }} />
+                                        <span className={bars ? 'size-2 rounded-sm' : 'size-2 rounded-full'} style={{ background: colour(index) }} />
                                         {item.label}
                                     </span>
-                                    <span className="tabular-nums">{formatNumber(Number(active.values[item.key]) || 0)}</span>
+                                    <span className="tabular-nums">{formatNumber(value(active, item.key))}</span>
                                 </div>
                             ))}
                         </div>

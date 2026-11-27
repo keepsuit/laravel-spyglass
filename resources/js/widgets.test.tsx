@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
-import { Details, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { change, Details, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -105,6 +105,33 @@ describe('Series', () => {
         expect(lines[0].getAttribute('points')?.split(' ')).toHaveLength(4);
         expect(screen.getByText('Processed')).toBeTruthy();
     });
+
+    it('stacks bars in tone colours, skipping empty segments', () => {
+        const widget: SeriesWidget = {
+            type: 'series',
+            key: 'recorded',
+            label: 'Log entries',
+            x: 'bucket',
+            lines: [
+                { key: 'error', label: 'Errors', tone: 'error' },
+                { key: 'warning', label: 'Warnings', tone: 'warning' },
+            ],
+            points: [
+                { bucket: '2026-01-01T11:00:00.000Z', error: 2, warning: 1 },
+                { bucket: '2026-01-01T12:00:00.000Z', error: 0, warning: 3 },
+            ],
+            filters: [],
+            style: 'bars',
+            note: 'At most one a minute.',
+        };
+
+        render(<Series widget={widget} ignored={[]} />);
+
+        const bars = [...document.querySelectorAll('rect')];
+        expect(bars.map((bar) => bar.getAttribute('fill'))).toEqual(['var(--error)', 'var(--warning)', 'var(--warning)']);
+        expect(document.querySelector('polyline')).toBeNull();
+        expect(screen.getByText('At most one a minute.')).toBeTruthy();
+    });
 });
 
 describe('Details', () => {
@@ -167,6 +194,19 @@ describe('Metrics', () => {
         expect(screen.getByRole('link', { name: /Failed jobs/ }).getAttribute('href')).toBe('/queue');
         expect(screen.getByText('9').className).toContain('text-error');
         expect(screen.queryByRole('link', { name: /Processed/ })).toBeNull();
+    });
+});
+
+describe('change', () => {
+    it('colours a change by the better direction, and leaves it neutral without one', () => {
+        expect(change(110, 100, 'up')).toEqual({ text: new Intl.NumberFormat(undefined, { style: 'percent', signDisplay: 'exceptZero' }).format(0.1), tone: 'ok' });
+        expect(change(110, 100, 'down')?.tone).toBe('error');
+        expect(change(90, 100, 'down')?.tone).toBe('ok');
+        expect(change(110, 100)?.tone).toBeNull();
+        expect(change(3, 0, 'down')).toEqual({ text: '+3', tone: 'error' });
+        expect(change(5, 5)).toEqual({ text: 'No change', tone: null });
+        expect(change('100+', 5)).toBeNull();
+        expect(change(5, undefined)).toBeNull();
     });
 });
 

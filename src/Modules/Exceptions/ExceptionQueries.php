@@ -2,10 +2,12 @@
 
 namespace Keepsuit\Spyglass\Modules\Exceptions;
 
+use Carbon\CarbonInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Hourly;
 use Keepsuit\Spyglass\Support\Sources;
 use stdClass;
 
@@ -99,6 +101,25 @@ class ExceptionQueries
     {
         return $this->whereResolved($this->groupsTable()->where('signature', $fingerprint))
             ->update(['resolved_at' => null]) > 0;
+    }
+
+    /**
+     * Recorded occurrences per hour since `$from`, as `Hourly::counts()`. Throttled: at most one a minute per
+     * exception and scope.
+     *
+     * @param  array{class?: string, scope?: string}  $filters
+     * @return list<array<string, mixed>>
+     */
+    public function hourly(CarbonInterface $from, array $filters = []): array
+    {
+        return Hourly::counts('exception', $from, fn (Builder $query) => $query
+            ->when(isset($filters['scope']), fn (Builder $query) => $query->where('scope', $filters['scope'] ?? null))
+            ->when(isset($filters['class']), fn (Builder $query) => $query->whereIn('signature', fn (Builder $groups) => $groups
+                ->from(ExceptionsModule::GROUPS)
+                ->select('signature')
+                ->where('kind', 'exception')
+                ->where('source_type', '')
+                ->where('class', $filters['class'] ?? null))));
     }
 
     /**

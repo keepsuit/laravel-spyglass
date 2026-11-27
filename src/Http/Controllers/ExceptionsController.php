@@ -7,6 +7,7 @@ use Illuminate\Http\Response;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Hourly;
 
 /**
  * @internal
@@ -14,6 +15,8 @@ use Keepsuit\Spyglass\Spyglass;
 class ExceptionsController extends Controller
 {
     public const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
+
+    public const string NOTE = 'Recorded occurrences: at most one a minute per exception and scope.';
 
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {
@@ -25,7 +28,8 @@ class ExceptionsController extends Controller
      */
     public function index(Request $request): array
     {
-        $filters = $this->filters($request, ['status' => 'in:unresolved,resolved', 'class' => '', 'scope' => '']);
+        $filters = $this->filters($request, ['range' => 'in:'.implode(',', array_keys(self::HOURS)), 'status' => 'in:unresolved,resolved', 'class' => '', 'scope' => '']);
+        $range = $filters['range'] ?? '24h';
         $groups = $this->queries->groups(array_filter([
             'status' => match ($filters['status'] ?? null) {
                 'resolved' => 'resolved',
@@ -37,6 +41,9 @@ class ExceptionsController extends Controller
         ], fn ($value) => $value !== null), page: $this->page($request));
 
         return Widget::page('Exceptions', [
+            Widget::series('recorded', 'Exceptions per hour', 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
+                $this->queries->hourly(Hourly::start(self::HOURS[$range]), array_intersect_key($filters, array_flip(['class', 'scope']))),
+                ['range', 'class', 'scope'], style: 'bars', note: self::NOTE),
             Widget::table('groups', 'Exceptions', [
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
@@ -44,8 +51,9 @@ class ExceptionsController extends Controller
                 Widget::field('count', 'Count', 'number'),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime'),
                 Widget::field('status', 'Status', 'status', self::TONES),
-            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
+            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}', filters: ['status', 'class', 'scope']),
         ], [
+            $this->rangeFilter($range),
             Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
             Widget::filter('class', 'Class', $filters['class'] ?? null, suggestions: $this->suggestions($this->queries->classes())),
             Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),

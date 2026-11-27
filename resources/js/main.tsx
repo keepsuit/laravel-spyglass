@@ -181,7 +181,7 @@ function renderWidgets(page: PageData, ignored: (filters: string[]) => string[],
             );
         if (widget.type === 'series')
             nodes.push(
-                <Span key={widget.key}>
+                <Span key={widget.key} half={widget.width === 'half'}>
                     <Series widget={widget} ignored={ignored(widget.filters)} />
                 </Span>,
             );

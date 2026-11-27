@@ -8,10 +8,23 @@ use Keepsuit\Spyglass\Spyglass;
 
 /**
  * @internal
+ *
+ * @phpstan-import-type Filter from Widget
  */
 abstract class Controller
 {
+    /** Ranges of the hourly charts, in hours. */
+    protected const array HOURS = ['24h' => 24, '7d' => 168];
+
     public function __construct(protected Spyglass $spyglass) {}
+
+    /**
+     * @return Filter
+     */
+    protected function rangeFilter(string $range): array
+    {
+        return Widget::filter('range', 'Range', $range, ['24h' => 'Last 24 hours', '7d' => 'Last 7 days']);
+    }
 
     /**
      * The non-empty filters of the request, as strings. `'0'` is a valid value.

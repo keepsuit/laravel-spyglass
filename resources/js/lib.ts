@@ -15,7 +15,18 @@ export type Choice = { value: string; label: string };
 export type Filter = { key: string; label: string; value: string | null; options: Choice[] | null; suggestions?: Choice[] };
 export type Row = Record<string, unknown>;
 
-export type MetricWidget = { type: 'metric'; key: string; label: string; value: number | string | null; filters: string[]; link?: string; tone?: Tone };
+export type MetricWidget = {
+    type: 'metric';
+    key: string;
+    label: string;
+    value: number | string | null;
+    filters: string[];
+    link?: string;
+    tone?: Tone;
+    format?: 'duration';
+    previous?: number;
+    better?: 'up' | 'down';
+};
 export type TableWidget = {
     type: 'table';
     key: string;
@@ -35,9 +46,12 @@ export type SeriesWidget = {
     key: string;
     label: string;
     x: string;
-    lines: { key: string; label: string }[];
+    lines: { key: string; label: string; tone?: Tone }[];
     points: Row[];
     filters: string[];
+    style?: 'bars';
+    note?: string;
+    width?: 'half';
 };
 export type DetailsWidget = { type: 'details'; key: string; label: string; items: (Field & { value: unknown })[]; actions: Action[]; filters: string[] };
 export type Widget = MetricWidget | TableWidget | SeriesWidget | DetailsWidget;

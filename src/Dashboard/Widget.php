@@ -35,14 +35,32 @@ final class Widget
     }
 
     /**
-     * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value.
+     * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value. `$format`
+     * `duration` reads the value as milliseconds. `$previous` is the value over the previous period, and
+     * `$better` (`up` or `down`) the direction that colours its change as good.
      *
      * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function metric(string $key, string $label, int|float|string|null $value, array $filters = [], ?string $link = null, ?string $tone = null): array
-    {
-        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'filters' => $filters, ...array_filter(['link' => $link, 'tone' => $tone], fn ($option) => $option !== null)];
+    public static function metric(
+        string $key,
+        string $label,
+        int|float|string|null $value,
+        array $filters = [],
+        ?string $link = null,
+        ?string $tone = null,
+        ?string $format = null,
+        int|float|null $previous = null,
+        ?string $better = null,
+    ): array {
+        return [
+            'type' => 'metric',
+            'key' => $key,
+            'label' => $label,
+            'value' => $value,
+            'filters' => $filters,
+            ...array_filter(compact('link', 'tone', 'format', 'previous', 'better'), fn ($option) => $option !== null),
+        ];
     }
 
     /**
@@ -92,22 +110,41 @@ final class Widget
     }
 
     /**
-     * Points share the `$x` key, a datetime, and a key per line.
+     * Points share the `$x` key, a datetime, and a key per line. A line can take the colour of a tone. `$style`
+     * `bars` stacks the lines as bars, one per point. `$note` says how to read the values.
      *
-     * @param  list<array{key: string, label: string}>  $lines
+     * @param  list<array{key: string, label: string, tone?: string}>  $lines
      * @param  iterable<array<string, mixed>>  $points
      * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function series(string $key, string $label, string $x, array $lines, iterable $points, array $filters = []): array
-    {
+    public static function series(
+        string $key,
+        string $label,
+        string $x,
+        array $lines,
+        iterable $points,
+        array $filters = [],
+        ?string $style = null,
+        ?string $note = null,
+        ?string $width = null,
+    ): array {
         $columns = [self::field($x, $x, 'datetime')];
 
         foreach ($lines as $line) {
             $columns[] = self::field($line['key'], $line['label'], 'number');
         }
 
-        return ['type' => 'series', 'key' => $key, 'label' => $label, 'x' => $x, 'lines' => $lines, 'points' => self::rows($columns, $points), 'filters' => $filters];
+        return [
+            'type' => 'series',
+            'key' => $key,
+            'label' => $label,
+            'x' => $x,
+            'lines' => $lines,
+            'points' => self::rows($columns, $points),
+            'filters' => $filters,
+            ...array_filter(compact('style', 'note', 'width'), fn ($option) => $option !== null),
+        ];
     }
 
     /**

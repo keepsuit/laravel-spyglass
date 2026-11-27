@@ -263,7 +263,7 @@ it('describes the queue', function () {
 
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
-    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
+    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job'], 'previous' => 0])
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(2)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
         ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
@@ -426,6 +426,7 @@ it('resolves and reopens an exception group', function () {
 });
 
 it('describes logs and shows an entry with its sources', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
     $error = apiLogEntry('error', 'Disk full', '{"disk":"local"}');
     $warning = apiLogEntry('warning', 'Slow', '{"ms":', '2026-03-01 11:00:00');
     DB::table(Sources::GROUPS)->insert(['kind' => 'log', 'signature' => LogsModule::signature('error', 'Disk full'), 'source_type' => 'command', 'source_hash' => sha1('backup'), 'source' => 'backup', 'count' => 7, 'last_seen_at' => '2026-03-01 12:00:00']);
@@ -485,4 +486,51 @@ it('suggests known values for the free text filters', function () {
             'scope' => [['value' => 'tenant:acme', 'label' => 'TENANT:ACME']],
         ])
         ->and($suggestions('/spyglass/api/logs'))->toMatchArray(['scope' => []]);
+});
+
+it('compares queue counters with the period just before, without counting the bucket between them twice', function () {
+    Date::setTestNow('2026-01-01 12:04:00');
+    // The last hour starts with the 11:00 bucket: the hour before ends just before it.
+    DB::table(QueueModule::AGGREGATES)->insert([
+        ['bucket' => '2026-01-01 10:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 2, 'failed' => 3, 'duration_sum' => 500, 'duration_max' => 400],
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 4, 'failed' => 1, 'duration_sum' => 100, 'duration_max' => 30],
+    ]);
+
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
+
+    expect(apiWidget($page, 'processed'))->toMatchArray(['value' => 4, 'previous' => 2])
+        ->and(apiWidget($page, 'processed'))->not->toHaveKey('better')
+        ->and(apiWidget($page, 'failed'))->toMatchArray(['value' => 1, 'previous' => 3, 'better' => 'down'])
+        ->and(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 20, 'previous' => 100, 'format' => 'duration'])
+        ->and(apiWidget($page, 'duration_max'))->toMatchArray(['value' => 30, 'previous' => 400]);
+
+    // The week before is past the retention of the aggregates.
+    expect($this->getJson('/spyglass/api/queue?range=7d')->json())->not->toHaveKey('widgets.0.previous');
+});
+
+it('counts recorded exceptions and log entries per hour, with every hour present', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
+    apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
+    apiLogEntry('critical', 'Disk gone', at: '2026-03-01 12:20:00');
+    apiLogEntry('warning', 'Slow', at: '2026-03-01 10:59:59');
+    apiLogEntry('warning', 'Too old', at: '2026-02-27 12:00:00');
+
+    $chart = apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded');
+
+    expect($chart)->toMatchArray(['style' => 'bars', 'filters' => ['range', 'level', 'scope']])
+        ->and($chart['points'])->toHaveCount(24)
+        ->and($chart['points'][0]['bucket'])->toBe('2026-02-28T13:00:00.000Z')
+        ->and($chart['points'][22])->toBe(['bucket' => '2026-03-01T11:00:00.000Z', 'error' => 0, 'warning' => 0, 'info' => 0])
+        ->and($chart['points'][21])->toMatchArray(['warning' => 1])
+        ->and($chart['points'][23])->toMatchArray(['error' => 2, 'warning' => 0]);
+
+    $fingerprint = str_repeat('a', 40);
+    seedExceptionGroup($fingerprint, scopes: ['tenant:a', 'tenant:b']);
+    $total = fn (string $query) => array_sum(array_column(apiWidget($this->getJson("/spyglass/api/exceptions?range=7d{$query}")->assertOk()->json(), 'recorded')['points'], 'count'));
+
+    expect(apiWidget($this->getJson('/spyglass/api/exceptions?range=7d')->json(), 'recorded')['points'])->toHaveCount(168)
+        ->and($total(''))->toBe(2)
+        ->and($total('&scope=tenant:a'))->toBe(1)
+        ->and($total('&class='.RuntimeException::class))->toBe(2)
+        ->and($total('&class=Missing'))->toBe(0);
 });
