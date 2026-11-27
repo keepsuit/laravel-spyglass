@@ -4,7 +4,7 @@ namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Keepsuit\Spyglass\Http\Descriptor as D;
+use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Spyglass;
 
@@ -36,19 +36,19 @@ class ExceptionsController extends Controller
             'scope' => $filters['scope'] ?? null,
         ], fn ($value) => $value !== null), page: $this->page($request));
 
-        return D::page('Exceptions', [
-            D::table('groups', 'Exceptions', [
-                D::field('class', 'Class'),
-                D::field('message', 'Message'),
-                D::field('location', 'Location'),
-                D::field('count', 'Count', 'number'),
-                D::field('last_seen_at', 'Last seen at', 'datetime'),
-                D::field('status', 'Status', 'status', self::TONES),
+        return Widget::page('Exceptions', [
+            Widget::table('groups', 'Exceptions', [
+                Widget::field('class', 'Class'),
+                Widget::field('message', 'Message'),
+                Widget::field('location', 'Location'),
+                Widget::field('count', 'Count', 'number'),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
+                Widget::field('status', 'Status', 'status', self::TONES),
             ], array_map($this->group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
         ], [
-            D::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
-            D::filter('class', 'Class', $filters['class'] ?? null),
-            D::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
+            Widget::filter('class', 'Class', $filters['class'] ?? null),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
         ]);
     }
 
@@ -65,33 +65,33 @@ class ExceptionsController extends Controller
         $group = $this->group((array) $group);
         $occurrences = $this->queries->occurrences($fingerprint, page: $page);
 
-        return D::page($group['class'], [
-            D::details('group', 'Exception', [
-                D::field('class', 'Class'),
-                D::field('message', 'Message'),
-                D::field('location', 'Location'),
-                D::field('count', 'Count', 'number'),
-                D::field('status', 'Status', 'status', self::TONES),
-                D::field('first_seen_at', 'First seen at', 'datetime'),
-                D::field('last_seen_at', 'Last seen at', 'datetime'),
-                D::field('resolved_at', 'Resolved at', 'datetime'),
+        return Widget::page($group['class'], [
+            Widget::details('group', 'Exception', [
+                Widget::field('class', 'Class'),
+                Widget::field('message', 'Message'),
+                Widget::field('location', 'Location'),
+                Widget::field('count', 'Count', 'number'),
+                Widget::field('status', 'Status', 'status', self::TONES),
+                Widget::field('first_seen_at', 'First seen at', 'datetime'),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
+                Widget::field('resolved_at', 'Resolved at', 'datetime'),
             ], $group, [
                 $group['status'] === 'resolved'
-                    ? D::action('reopen', 'Reopen', "exceptions/{$fingerprint}/reopen")
-                    : D::action('resolve', 'Resolve', "exceptions/{$fingerprint}/resolve"),
+                    ? Widget::action('reopen', 'Reopen', "exceptions/{$fingerprint}/reopen")
+                    : Widget::action('resolve', 'Resolve', "exceptions/{$fingerprint}/resolve"),
             ]),
             $this->sources($this->queries->sources($fingerprint)),
-            D::table('occurrences', 'Occurrences', [
-                D::field('occurred_at', 'Occurred at', 'datetime'),
-                D::field('message', 'Message'),
-                D::field('cause_class', 'Cause'),
-                D::field('cause_message', 'Cause message'),
-                D::field('source_type', 'Source type'),
-                D::field('source', 'Source'),
-                D::field('user_id', 'User'),
-                D::field('scope_label', 'Scope'),
-                D::field('context', 'Context', 'json'),
-                D::field('trace', 'Trace', 'json'),
+            Widget::table('occurrences', 'Occurrences', [
+                Widget::field('occurred_at', 'Occurred at', 'datetime'),
+                Widget::field('message', 'Message'),
+                Widget::field('cause_class', 'Cause'),
+                Widget::field('cause_message', 'Cause message'),
+                Widget::field('source_type', 'Source type'),
+                Widget::field('source', 'Source'),
+                Widget::field('user_id', 'User'),
+                Widget::field('scope_label', 'Scope'),
+                Widget::field('context', 'Context', 'json'),
+                Widget::field('trace', 'Trace', 'json'),
             ], $this->rows($occurrences->items()), $occurrences),
         ]);
     }

@@ -2,7 +2,7 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
-use Keepsuit\Spyglass\Http\Descriptor as D;
+use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Health\HealthQueries;
 use Keepsuit\Spyglass\Spyglass;
 
@@ -21,12 +21,12 @@ class HealthController extends Controller
      */
     public function index(): array
     {
-        return D::page('Health', [
-            D::table('checks', 'Checks', [
-                D::field('label', 'Check'),
-                D::field('status', 'Status', 'status', ['ok' => 'ok', 'info' => 'info', 'warning' => 'warning', 'error' => 'error']),
-                D::field('value', 'Value'),
-                D::field('message', 'Message'),
+        return Widget::page('Health', [
+            Widget::table('checks', 'Checks', [
+                Widget::field('label', 'Check'),
+                Widget::field('status', 'Status', 'status', ['ok' => 'ok', 'info' => 'info', 'warning' => 'warning', 'error' => 'error']),
+                Widget::field('value', 'Value'),
+                Widget::field('message', 'Message'),
             ], $this->queries->checks()),
         ]);
     }

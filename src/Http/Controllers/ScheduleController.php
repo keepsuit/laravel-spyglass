@@ -3,7 +3,7 @@
 namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Keepsuit\Spyglass\Http\Descriptor as D;
+use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleQueries;
 use Keepsuit\Spyglass\Spyglass;
 
@@ -24,16 +24,16 @@ class ScheduleController extends Controller
      */
     public function index(): array
     {
-        return D::page('Schedule', [
-            D::table('tasks', 'Tasks', [
-                D::field('label', 'Task'),
-                D::field('expression', 'Expression'),
-                D::field('last_status', 'Last run', 'status', self::TONES),
-                D::field('last_started_at', 'Last started at', 'datetime'),
-                D::field('last_duration_ms', 'Duration', 'duration'),
-                D::field('next_run', 'Next run', 'datetime'),
-                D::field('missed', 'Missed', 'boolean'),
-                D::field('stale', 'Removed', 'boolean'),
+        return Widget::page('Schedule', [
+            Widget::table('tasks', 'Tasks', [
+                Widget::field('label', 'Task'),
+                Widget::field('expression', 'Expression'),
+                Widget::field('last_status', 'Last run', 'status', self::TONES),
+                Widget::field('last_started_at', 'Last started at', 'datetime'),
+                Widget::field('last_duration_ms', 'Duration', 'duration'),
+                Widget::field('next_run', 'Next run', 'datetime'),
+                Widget::field('missed', 'Missed', 'boolean'),
+                Widget::field('stale', 'Removed', 'boolean'),
             ], $this->queries->tasks()->map($this->flatten(...)), link: 'schedule/{key}'),
         ]);
     }
@@ -50,35 +50,35 @@ class ScheduleController extends Controller
 
         $runs = $this->queries->runs($task, page: $page);
 
-        return D::page($details['label'], [
-            D::details('task', 'Task', [
-                D::field('label', 'Task'),
-                D::field('command', 'Command'),
-                D::field('description', 'Description'),
-                D::field('expression', 'Expression'),
-                D::field('repeat_seconds', 'Repeats every (s)', 'number'),
-                D::field('timezone', 'Timezone'),
-                D::field('environments', 'Environments', 'json'),
-                D::field('without_overlapping', 'Without overlapping', 'boolean'),
-                D::field('next_run', 'Next run', 'datetime'),
-                D::field('missed', 'Missed', 'boolean'),
-                D::field('overlapping', 'Overlapping', 'boolean'),
-                D::field('stale', 'Removed', 'boolean'),
-                D::field('last_skipped_at', 'Last skipped at', 'datetime'),
-                D::field('last_skip_reason', 'Last skip reason'),
-                D::field('first_seen_at', 'First seen at', 'datetime'),
-                D::field('last_seen_at', 'Last seen at', 'datetime'),
+        return Widget::page($details['label'], [
+            Widget::details('task', 'Task', [
+                Widget::field('label', 'Task'),
+                Widget::field('command', 'Command'),
+                Widget::field('description', 'Description'),
+                Widget::field('expression', 'Expression'),
+                Widget::field('repeat_seconds', 'Repeats every (s)', 'number'),
+                Widget::field('timezone', 'Timezone'),
+                Widget::field('environments', 'Environments', 'json'),
+                Widget::field('without_overlapping', 'Without overlapping', 'boolean'),
+                Widget::field('next_run', 'Next run', 'datetime'),
+                Widget::field('missed', 'Missed', 'boolean'),
+                Widget::field('overlapping', 'Overlapping', 'boolean'),
+                Widget::field('stale', 'Removed', 'boolean'),
+                Widget::field('last_skipped_at', 'Last skipped at', 'datetime'),
+                Widget::field('last_skip_reason', 'Last skip reason'),
+                Widget::field('first_seen_at', 'First seen at', 'datetime'),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
             ], $this->flatten($details)),
-            D::table('runs', 'Runs', [
-                D::field('started_at', 'Started at', 'datetime'),
-                D::field('status', 'Status', 'status', self::TONES),
-                D::field('duration_ms', 'Duration', 'duration'),
-                D::field('exit_code', 'Exit code', 'number'),
-                D::field('overlapped', 'Overlapped', 'boolean'),
-                D::field('exception', 'Exception', 'link'),
-                D::field('host', 'Host'),
-                D::field('scope_label', 'Scope'),
-                D::field('output', 'Output'),
+            Widget::table('runs', 'Runs', [
+                Widget::field('started_at', 'Started at', 'datetime'),
+                Widget::field('status', 'Status', 'status', self::TONES),
+                Widget::field('duration_ms', 'Duration', 'duration'),
+                Widget::field('exit_code', 'Exit code', 'number'),
+                Widget::field('overlapped', 'Overlapped', 'boolean'),
+                Widget::field('exception', 'Exception', 'link'),
+                Widget::field('host', 'Host'),
+                Widget::field('scope_label', 'Scope'),
+                Widget::field('output', 'Output'),
             ], array_map(
                 fn (array $run) => [...$run, 'exception' => $this->exceptionLink($run['exception_class'], $run['fingerprint'])],
                 $this->rows($runs->items()),

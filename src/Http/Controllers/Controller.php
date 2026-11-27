@@ -3,7 +3,7 @@
 namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Keepsuit\Spyglass\Http\Descriptor as D;
+use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Spyglass;
 
 /**
@@ -65,11 +65,11 @@ abstract class Controller
      */
     protected function sources(array $sources): array
     {
-        return D::table('sources', 'Sources', [
-            D::field('source_type', 'Type'),
-            D::field('source', 'Source'),
-            D::field('count', 'Count', 'number'),
-            D::field('last_seen_at', 'Last seen at', 'datetime'),
+        return Widget::table('sources', 'Sources', [
+            Widget::field('source_type', 'Type'),
+            Widget::field('source', 'Source'),
+            Widget::field('count', 'Count', 'number'),
+            Widget::field('last_seen_at', 'Last seen at', 'datetime'),
         ], $this->rows($sources));
     }
 
@@ -80,6 +80,6 @@ abstract class Controller
      */
     protected function exceptionLink(?string $class, ?string $fingerprint): ?array
     {
-        return D::link($class, $fingerprint === null || ! config('spyglass.modules.exceptions.enabled') ? null : "exceptions/{$fingerprint}");
+        return Widget::link($class, $fingerprint === null || ! config('spyglass.modules.exceptions.enabled') ? null : "exceptions/{$fingerprint}");
     }
 }

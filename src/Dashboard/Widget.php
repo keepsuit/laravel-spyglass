@@ -1,6 +1,6 @@
 <?php
 
-namespace Keepsuit\Spyglass\Http;
+namespace Keepsuit\Spyglass\Dashboard;
 
 use DateTimeInterface;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -20,7 +20,7 @@ use Illuminate\Support\Facades\Date;
  * @phpstan-type Action array{key: string, label: string, url: string}
  * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>}
  */
-final class Descriptor
+final class Widget
 {
     /**
      * `page` selects the page of the paginated table.
