@@ -87,7 +87,7 @@ body {
     height: 2rem;
     padding: 0 0.75rem;
     border: 1px solid var(--line);
-    border-radius: 0.5rem;
+    border-radius: 999px;
     background: var(--surface);
     color: var(--ink);
     font-weight: 500;
@@ -96,6 +96,12 @@ body {
         transform 120ms var(--ease),
         background-color 120ms var(--ease),
         border-color 120ms var(--ease);
+}
+
+/* The page's own action, outlined in the brand orange. */
+.btn-accent {
+    border-color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .btn:active:not(:disabled) {

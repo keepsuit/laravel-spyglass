@@ -127,7 +127,15 @@ function breakable(text: string): ReactNode[] {
     return text.split(/(?<=[\\/])/).flatMap((part, index) => (index ? [<wbr key={index} />, part] : [part]));
 }
 
-export const card = 'min-w-0 overflow-hidden rounded-xl border border-line bg-surface';
+const frame = 'min-w-0 overflow-hidden rounded-[1.25rem] border';
+
+export const card = `${frame} border-line/70 bg-surface`;
+
+// A faint wash of the tone, so a metric that needs attention stands out without shouting.
+const tints: Partial<Record<Tone, string>> = {
+    error: 'border-[color-mix(in_oklab,var(--surface)_80%,var(--error))] bg-[color-mix(in_oklab,var(--surface)_95%,var(--error))]',
+    warning: 'border-[color-mix(in_oklab,var(--surface)_78%,var(--warning))] bg-[color-mix(in_oklab,var(--surface)_94%,var(--warning))]',
+};
 
 function Heading({ label, ignored, children }: { label: string; ignored: string[]; children?: ReactNode }) {
     return (
@@ -166,12 +174,14 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
                     </>
                 );
 
+                const box = (metric.tone && tints[metric.tone] && `${frame} ${tints[metric.tone]}`) || card;
+
                 return metric.link ? (
-                    <Link key={metric.key} to={metric.link} className={`${card} lift block px-4 py-4`}>
+                    <Link key={metric.key} to={metric.link} className={`${box} lift block px-4 py-4`}>
                         {body}
                     </Link>
                 ) : (
-                    <div key={metric.key} className={`${card} px-4 py-4`}>
+                    <div key={metric.key} className={`${box} px-4 py-4`}>
                         {body}
                     </div>
                 );
@@ -234,7 +244,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
             ) : (
                 <div className="overflow-x-auto">
                     <table className="w-full text-left text-[13px]" data-wide={widget.columns.length > 6 || undefined}>
-                        <thead className="border-y border-line bg-bg/60 text-xs text-muted">
+                        <thead className="border-y border-line text-xs text-muted">
                             <tr>
                                 {widget.columns.map((column) => (
                                     <th key={column.key} scope="col" className={`px-4 py-2 font-medium whitespace-nowrap ${alignRight(column) ? 'text-right' : ''}`}>

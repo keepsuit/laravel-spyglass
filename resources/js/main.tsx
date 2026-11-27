@@ -31,7 +31,7 @@ function App() {
 
     return (
         <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">
-            <aside className="border-b border-line bg-surface md:sticky md:top-0 md:h-screen md:border-r md:border-b-0">
+            <aside className="border-b border-line bg-surface md:sticky md:top-0 md:h-screen md:border-b-0 md:bg-transparent">
                 <div className="flex items-center gap-2 px-4 pt-4 pb-2 md:px-6 md:pt-7 md:pb-6">
                     <svg viewBox="0 0 24 24" className="size-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                         <circle cx="7" cy="17" r="4" />
@@ -46,7 +46,9 @@ function App() {
                             to={module.key}
                             aria-current={module.key === current ? 'page' : undefined}
                             className={`flex min-h-11 items-center rounded-lg px-3 whitespace-nowrap transition-colors duration-150 md:min-h-9 ${
-                                module.key === current ? 'bg-bg font-semibold text-ink shadow-[inset_2px_0_0_var(--accent)]' : 'text-muted hover:bg-bg/70 hover:text-ink'
+                                module.key === current
+                                    ? 'bg-surface font-semibold text-ink ring-1 ring-line before:mr-2.5 before:size-2 before:rounded-full before:bg-accent'
+                                    : 'text-muted hover:bg-surface/60 hover:text-ink'
                             }`}
                         >
                             {module.label}
@@ -116,7 +118,7 @@ function Page({ path, search, module }: { path: string; search: string; module?:
                     {query.dataUpdatedAt > 0 && (
                         <span className="tabular-nums">Updated {new Date(query.dataUpdatedAt).toLocaleTimeString()}</span>
                     )}
-                    <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} className="btn">
+                    <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} className="btn btn-accent">
                         {query.isFetching ? 'Refreshing…' : 'Refresh'}
                     </button>
                 </div>
