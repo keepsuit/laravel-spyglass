@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
-import { Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { densify, Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -91,57 +91,55 @@ describe('Table', () => {
 });
 
 describe('Series', () => {
-    it('draws a line per series, filling missing points with zero', () => {
-        const widget: SeriesWidget = {
-            type: 'series',
-            key: 'throughput',
-            label: 'Throughput',
-            x: 'bucket',
-            lines: [
-                { key: 'processed', label: 'Processed' },
-                { key: 'failed', label: 'Failed' },
-            ],
-            points: [
-                { bucket: '2026-01-01T12:00:00.000Z', processed: 4, failed: 1 },
-                { bucket: '2026-01-01T12:15:00.000Z', processed: 2, failed: 0 },
-                { bucket: '2026-01-01T12:05:00.000Z', processed: 3, failed: 0 },
-            ],
-            filters: [],
-        };
+    const bars: SeriesWidget = {
+        type: 'series',
+        key: 'recorded',
+        label: 'Log entries',
+        x: 'bucket',
+        lines: [
+            { key: 'error', label: 'Errors', tone: 'error' },
+            { key: 'warning', label: 'Warnings', tone: 'warning' },
+        ],
+        points: [
+            { bucket: '2026-01-01T11:00:00.000Z', error: 2, warning: 1 },
+            { bucket: '2026-01-01T12:00:00.000Z', error: 0, warning: 3 },
+        ],
+        filters: [],
+        style: 'bars',
+        note: 'At most one a minute.',
+    };
+    const fills = () => [...document.querySelectorAll('.ts-chart__bar path')].map((bar) => bar.getAttribute('fill'));
 
-        render(<Series widget={widget} ignored={[]} />);
+    it('fills missing points between the first and the last with zero, in time order', () => {
+        const points = densify({ ...bars, points: [{ bucket: '2026-01-01T12:00:00.000Z', error: 1 }, { bucket: '2026-01-01T12:15:00.000Z', error: 2 }, { bucket: '2026-01-01T12:05:00.000Z', error: 3 }] });
 
-        const lines = document.querySelectorAll('polyline');
-        expect(lines).toHaveLength(2);
-        expect(lines[0].getAttribute('points')?.split(' ')).toHaveLength(4);
-        expect(screen.getByText('Processed')).toBeTruthy();
+        expect(points.map((point) => new Date(point.time).toISOString().slice(11, 16))).toEqual(['12:00', '12:05', '12:10', '12:15']);
+        expect(points[2].values).toEqual({});
     });
 
-    it('stacks bars in tone colours, skipping empty segments', () => {
-        const widget: SeriesWidget = {
-            type: 'series',
-            key: 'recorded',
-            label: 'Log entries',
-            x: 'bucket',
-            lines: [
-                { key: 'error', label: 'Errors', tone: 'error' },
-                { key: 'warning', label: 'Warnings', tone: 'warning' },
-            ],
-            points: [
-                { bucket: '2026-01-01T11:00:00.000Z', error: 2, warning: 1 },
-                { bucket: '2026-01-01T12:00:00.000Z', error: 0, warning: 3 },
-            ],
-            filters: [],
-            style: 'bars',
-            note: 'At most one a minute.',
-        };
+    it('draws a line per series in its colour', () => {
+        render(<Series widget={{ ...bars, style: undefined, lines: [{ key: 'error', label: 'Errors' }, { key: 'warning', label: 'Warnings' }] }} ignored={[]} />);
 
-        render(<Series widget={widget} ignored={[]} />);
+        const strokes = [...document.querySelectorAll('.ts-chart__marks path')].map((path) => path.getAttribute('stroke'));
+        expect(strokes).toContain('var(--series-1)');
+        expect(strokes).toContain('var(--series-2)');
+    });
 
-        const bars = [...document.querySelectorAll('rect')];
-        expect(bars.map((bar) => bar.getAttribute('fill'))).toEqual(['var(--error)', 'var(--warning)', 'var(--warning)']);
-        expect(document.querySelector('polyline')).toBeNull();
+    it('stacks bars in tone colours and shows or hides a series from the legend', () => {
+        render(<Series widget={bars} ignored={[]} />);
+
+        expect(fills().filter((fill) => fill === 'var(--warning)')).toHaveLength(2);
         expect(screen.getByText('At most one a minute.')).toBeTruthy();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Warnings' }));
+        expect(screen.getByRole('button', { name: 'Warnings' }).getAttribute('aria-pressed')).toBe('false');
+        expect(fills()).not.toContain('var(--warning)');
+        expect(fills()).toContain('var(--error)');
+
+        // Hiding the last visible series shows them all again.
+        fireEvent.click(screen.getByRole('button', { name: 'Errors' }));
+        expect(fills()).toContain('var(--warning)');
+        expect(fills()).toContain('var(--error)');
     });
 });
 

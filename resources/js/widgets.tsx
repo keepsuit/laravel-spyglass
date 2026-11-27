@@ -1,5 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { areaY, barY, defineChart, lineY } from '@tanstack/charts';
+import { Chart } from '@tanstack/charts/react';
+import { scaleBand } from '@tanstack/charts/scales/band';
+import { scaleLinear } from '@tanstack/charts/scales/linear';
+import { scaleOrdinal } from '@tanstack/charts/scales/ordinal';
+import { scaleUtc } from '@tanstack/charts/scales/time';
+import { tooltip } from '@tanstack/charts/tooltip';
+import { createContext, useContext, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import {
     api,
     fill,
@@ -367,167 +374,112 @@ export function Details({ widget }: { widget: DetailsWidget }) {
     );
 }
 
-const height = 200;
-const pad = { top: 12, right: 12, bottom: 24, left: 44 };
+type Datum = { time: Date; series: string; value: number };
+
+const chartHeight = 220;
 
 /**
  * Lines over time, or stacked bars with `style: 'bars'`. Missing points between the first and the last count as
- * zero, at the smallest step between points.
+ * zero, at the smallest step between points. The legend shows and hides lines.
  */
 export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: string[] }) {
     const box = useBox();
-    const [hover, setHover] = useState<number | null>(null);
-    // Drawn at the width it is shown at, so labels keep their size on a phone.
-    const frame = useRef<HTMLDivElement>(null);
-    const [width, setWidth] = useState(800);
-
-    useEffect(() => {
-        if (!frame.current || typeof ResizeObserver === 'undefined') return;
-        const observer = new ResizeObserver(([entry]) => setWidth(Math.max(240, Math.round(entry.contentRect.width))));
-        observer.observe(frame.current);
-        return () => observer.disconnect();
-    }, [widget.points.length > 0]);
+    const [hidden, setHidden] = useState<string[]>([]);
     const bars = widget.style === 'bars';
-    const points = densify(widget);
-    const value = (point: { values: Row }, key: string) => Number(point.values[key]) || 0;
-    const peak = (point: { values: Row }) => {
-        const values = widget.lines.map((line) => value(point, line.key));
-        return bars ? values.reduce((sum, v) => sum + v, 0) : Math.max(0, ...values);
-    };
-    // Even, so the middle gridline falls on a whole number.
-    const max = 2 * Math.ceil(Math.max(1, ...points.map(peak)) / 2);
-    const first = points[0]?.time ?? 0;
-    const span = Math.max(1, (points.at(-1)?.time ?? 0) - first);
-    const plot = width - pad.left - pad.right;
-    const slot = plot / Math.max(1, points.length);
-    // Bars sit in equal slots, lines on the time axis.
-    const x = (index: number) => (bars ? pad.left + (index + 0.5) * slot : pad.left + ((points[index].time - first) / span) * plot);
-    const y = (value: number) => height - pad.bottom - (value / max) * (height - pad.top - pad.bottom);
-    const active = hover === null ? null : points[hover];
     const colour = (index: number) => {
         const tone = widget.lines[index]?.tone;
         return tone ? `var(--${tone})` : `var(--series-${(index % 8) + 1})`;
     };
-    const line = (key: string) => points.map((point, index) => `${x(index)},${y(value(point, key))}`).join(' ');
+    // Hiding the last visible line shows them all again rather than an empty chart.
+    const toggle = (key: string) =>
+        setHidden((keys) => (keys.includes(key) ? keys.filter((k) => k !== key) : keys.length + 1 >= widget.lines.length ? [] : [...keys, key]));
 
-    const onMove = (event: MouseEvent<SVGSVGElement>) => {
-        const box = event.currentTarget.getBoundingClientRect();
-        const at = ((event.clientX - box.left) / box.width) * width;
-        let nearest = 0;
-        points.forEach((_, index) => {
-            if (Math.abs(x(index) - at) < Math.abs(x(nearest) - at)) nearest = index;
+    const definition = useMemo(() => {
+        const shown = widget.lines.filter((line) => !hidden.includes(line.key));
+        const points = densify(widget);
+        const rows: Datum[] = points.flatMap((point) =>
+            shown.map((line) => ({ time: new Date(point.time), series: line.label, value: Number(point.values[line.key]) || 0 })),
+        );
+        // Colours follow the position among all lines, so hiding one leaves the others as they were.
+        const color = scaleOrdinal<string, string>()
+            .domain(widget.lines.map((line) => line.label))
+            .range(widget.lines.map((_, index) => colour(index)));
+        const first = shown[0] ? rows.filter((row) => row.series === shown[0].label) : [];
+        const series = new Set(shown.map((line) => line.label));
+        const integer = (value: number) => (Number.isInteger(value) ? formatNumber(value) : '');
+
+        return defineChart({
+            marks: bars
+                ? [barY(rows, { x: 'time', y: 'value', z: 'series', inset: 1, radius: { end: 2 } })]
+                : [
+                      areaY(first, { x: 'time', y: 'value', fill: first.length ? color(first[0].series) : undefined, fillOpacity: 0.08 }),
+                      ...shown.map((line) => lineY(rows.filter((row) => row.series === line.label), { x: 'time', y: 'value', z: 'series', strokeWidth: 2 })),
+                  ],
+            scales: {
+                x: bars
+                    ? { scale: () => scaleBand<Date>().padding(0.15), axis: { ticks: { format: (value: Date) => formatShort(value.getTime()), size: 0 } } }
+                    : { scale: scaleUtc, axis: { ticks: { format: (value: Date) => formatShort(value.getTime()), size: 0 } } },
+                y: { scale: scaleLinear, nice: true, grid: true, axis: { ticks: { format: integer, size: 0 } } },
+            },
+            color: { scale: color },
+            theme: { muted: 'var(--muted)', grid: 'var(--line)' },
+            focus: 'group-x',
+            tooltip: {
+                use: tooltip,
+                sort: 'color-domain',
+                // The shading under the first line is a mark of its own: its points are left out.
+                formatGroup: (group) =>
+                    [
+                        group[0]?.xValue instanceof Date ? formatDate(group[0].xValue.toISOString()) : '',
+                        ...group.filter((point) => series.has(point.groupLabel)).map((point) => `${point.groupLabel}: ${formatNumber(point.datum.value)}`),
+                    ].join('\n'),
+            },
         });
-        setHover(nearest);
-    };
+    }, [widget, hidden, bars]);
 
     return (
         <section className={box}>
             <Heading label={widget.label} ignored={ignored}>
-                <ul className="flex flex-wrap gap-x-4 gap-y-1 text-muted">
-                    {widget.lines.map((item, index) => (
-                        <li key={item.key} className="flex items-center gap-1.5">
-                            <span className={bars ? 'size-2 rounded-sm' : 'h-0.5 w-3 rounded'} style={{ background: colour(index) }} />
-                            {item.label}
-                        </li>
-                    ))}
+                <ul className="flex flex-wrap gap-x-1 gap-y-1 text-muted">
+                    {widget.lines.map((item, index) => {
+                        const swatch = <span className={bars ? 'size-2 rounded-sm' : 'h-0.5 w-3 rounded'} style={{ background: colour(index) }} />;
+                        return (
+                            <li key={item.key}>
+                                {widget.lines.length > 1 ? (
+                                    <button
+                                        type="button"
+                                        aria-pressed={!hidden.includes(item.key)}
+                                        title={hidden.includes(item.key) ? `Show ${item.label}` : `Hide ${item.label}`}
+                                        onClick={() => toggle(item.key)}
+                                        className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-[opacity,background-color] duration-150 hover:bg-bg aria-[pressed=false]:opacity-40 pointer-coarse:min-h-11"
+                                    >
+                                        {swatch}
+                                        {item.label}
+                                    </button>
+                                ) : (
+                                    <span className="flex items-center gap-1.5 px-1.5 py-0.5">
+                                        {swatch}
+                                        {item.label}
+                                    </span>
+                                )}
+                            </li>
+                        );
+                    })}
                 </ul>
             </Heading>
             {widget.note && <p className="-mt-2 px-4 pb-2 text-xs text-muted">{widget.note}</p>}
-            {points.length === 0 ? (
+            {widget.points.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">Nothing recorded in this range.</p>
             ) : (
-                <div ref={frame} className="relative mx-3 mb-3">
-                    <svg
-                        viewBox={`0 0 ${width} ${height}`}
-                        className="h-auto w-full"
-                        role="img"
-                        aria-label={`${widget.label}, ${points.length} points`}
-                        onMouseMove={onMove}
-                        onMouseLeave={() => setHover(null)}
-                    >
-                        {[0, 0.5, 1].map((ratio) => (
-                            <g key={ratio}>
-                                <line x1={pad.left} x2={width - pad.right} y1={y(max * ratio)} y2={y(max * ratio)} stroke="var(--line)" strokeDasharray={ratio ? '2 4' : undefined} />
-                                <text x={pad.left - 8} y={y(max * ratio) + 4} textAnchor="end" fontSize="11" fill="var(--muted)">
-                                    {formatNumber(max * ratio)}
-                                </text>
-                            </g>
-                        ))}
-                        {[0, points.length - 1].map((index, end) => (
-                            <text
-                                key={end}
-                                x={bars ? x(index) + ((end ? 1 : -1) * slot) / 2 : x(index)}
-                                y={height - 6}
-                                textAnchor={end ? 'end' : 'start'}
-                                fontSize="11"
-                                fill="var(--muted)"
-                            >
-                                {formatShort(points[index].time)}
-                            </text>
-                        ))}
-                        {bars && hover !== null && <rect x={x(hover) - slot / 2} y={pad.top} width={slot} height={height - pad.top - pad.bottom} fill="var(--line)" opacity="0.5" />}
-                        {bars &&
-                            points.flatMap((point, index) => {
-                                let base = 0;
-                                return widget.lines.map((item, lineIndex) => {
-                                    const v = value(point, item.key);
-                                    const top = y(base + v);
-                                    const bottom = y(base);
-                                    base += v;
-                                    return v ? (
-                                        <rect
-                                            key={`${index}-${item.key}`}
-                                            x={x(index) - slot * 0.35}
-                                            y={top}
-                                            width={Math.max(1, slot * 0.7)}
-                                            height={bottom - top}
-                                            fill={colour(lineIndex)}
-                                            rx={Math.min(2, slot * 0.15)}
-                                        />
-                                    ) : null;
-                                });
-                            })}
-                        {!bars && widget.lines.length > 0 && (
-                            <polygon fill={colour(0)} fillOpacity="0.08" points={`${x(0)},${y(0)} ${line(widget.lines[0].key)} ${x(points.length - 1)},${y(0)}`} />
-                        )}
-                        {!bars &&
-                            widget.lines.map((item, index) => (
-                                <polyline
-                                    key={item.key}
-                                    fill="none"
-                                    stroke={colour(index)}
-                                    strokeWidth="2"
-                                    strokeLinejoin="round"
-                                    vectorEffect="non-scaling-stroke"
-                                    points={line(item.key)}
-                                />
-                            ))}
-                        {!bars && hover !== null && <line x1={x(hover)} x2={x(hover)} y1={pad.top} y2={height - pad.bottom} stroke="var(--muted)" strokeDasharray="3 3" />}
-                    </svg>
-                    {active && hover !== null && (
-                        <div
-                            className="pointer-events-none absolute top-0 rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg shadow-ink/5"
-                            style={x(hover) > width / 2 ? { right: `${(1 - x(hover) / width) * 100 + 2}%` } : { left: `${(x(hover) / width) * 100 + 2}%` }}
-                        >
-                            <div className="mb-1 font-medium">{formatDate(new Date(active.time).toISOString())}</div>
-                            {widget.lines.map((item, index) => (
-                                <div key={item.key} className="flex items-center justify-between gap-4">
-                                    <span className="flex items-center gap-1.5 text-muted">
-                                        <span className={bars ? 'size-2 rounded-sm' : 'size-2 rounded-full'} style={{ background: colour(index) }} />
-                                        {item.label}
-                                    </span>
-                                    <span className="tabular-nums">{formatNumber(value(active, item.key))}</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                <div className="chart mx-3 mb-3 text-[11px] text-ink">
+                    <Chart definition={definition} height={chartHeight} ariaLabel={`${widget.label}, ${widget.points.length} points`} />
                 </div>
             )}
         </section>
     );
 }
 
-function densify(widget: SeriesWidget): { time: number; values: Row }[] {
+export function densify(widget: SeriesWidget): { time: number; values: Row }[] {
     const points = widget.points
         .map((values) => ({ time: new Date(String(values[widget.x])).getTime(), values }))
         .filter((point) => !Number.isNaN(point.time))

@@ -189,3 +189,14 @@ body {
 table[data-wide] .long {
     min-width: 12rem;
 }
+
+/* Chart tooltips take the look of the dashboard's popups; the chart library reads these variables. */
+.chart {
+    --ts-chart-tooltip-background: var(--surface);
+    --ts-chart-tooltip-color: var(--ink);
+    --ts-chart-tooltip-border: 1px solid var(--line);
+    --ts-chart-tooltip-border-radius: 0.5rem;
+    --ts-chart-tooltip-padding: 0.5rem 0.75rem;
+    --ts-chart-tooltip-shadow: 0 10px 15px -3px color-mix(in oklab, var(--ink) 6%, transparent);
+    --ts-chart-tooltip-font: 400 0.75rem/1.6 system-ui, sans-serif;
+}
