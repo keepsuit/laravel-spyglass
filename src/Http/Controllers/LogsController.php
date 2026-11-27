@@ -59,7 +59,7 @@ class LogsController extends Controller
      * @param  list<array<string, mixed>>  $hours  as `LogQueries::hourly()`
      * @return array<string, mixed>
      */
-    public static function chart(array $hours, ?string $width = null, string $label = 'Log entries per hour'): array
+    public static function chart(array $hours, string $label = 'Log entries per hour'): array
     {
         $lines = ['error' => 'Errors', 'warning' => 'Warnings', 'info' => 'Notices'];
 
@@ -75,7 +75,7 @@ class LogsController extends Controller
 
         return Widget::series('recorded', $label, 'bucket', array_map(
             fn (string $tone, string $label) => ['key' => $tone, 'label' => $label, 'tone' => $tone], array_keys($lines), $lines,
-        ), $points, ['range', 'level', 'scope'], style: 'bars', note: self::NOTE, width: $width);
+        ), $points, ['range', 'level', 'scope'], style: 'bars', note: self::NOTE);
     }
 
     /**

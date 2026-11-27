@@ -54,7 +54,16 @@ export type SeriesWidget = {
     width?: 'half';
 };
 export type DetailsWidget = { type: 'details'; key: string; label: string; items: (Field & { value: unknown })[]; actions: Action[]; filters: string[] };
-export type Widget = MetricWidget | TableWidget | SeriesWidget | DetailsWidget;
+export type GroupWidget = {
+    type: 'group';
+    key: string;
+    label: string;
+    widgets: (TableWidget | SeriesWidget | DetailsWidget)[];
+    filters: string[];
+    more?: string;
+    width?: 'half';
+};
+export type Widget = MetricWidget | TableWidget | SeriesWidget | DetailsWidget | GroupWidget;
 export type Page = { title: string; filters: Filter[]; widgets: Widget[] };
 
 export class ApiError extends Error {

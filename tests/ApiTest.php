@@ -5,6 +5,7 @@ use Illuminate\Foundation\Console\ClosureCommand;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -56,7 +57,17 @@ function apiRequest(Route $route, array $parameters = []): array
 
 function apiWidget(array $page, string $key): array
 {
-    return collect($page['widgets'])->firstWhere('key', $key) ?? throw new RuntimeException("No widget [{$key}].");
+    return apiWidgets($page)->firstWhere('key', $key) ?? throw new RuntimeException("No widget [{$key}].");
+}
+
+/**
+ * Every widget of a page, those of groups included.
+ *
+ * @return Collection<int, array<string, mixed>>
+ */
+function apiWidgets(array $page): Collection
+{
+    return collect($page['widgets'])->flatMap(fn (array $widget) => [$widget, ...($widget['widgets'] ?? [])]);
 }
 
 function apiItems(array $page, string $key): array
@@ -160,6 +171,11 @@ it('describes the overview of the enabled modules', function () {
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('inspire'), 'started_at' => '2026-03-01 12:00:00', 'status' => 'failed', 'host' => 'web-1',
     ]);
+    apiTask('archive');
+    DB::table(ScheduleModule::TASKS)->where('label', 'archive')->update(['expression' => '0 0 1 1 *']);
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('archive'), 'started_at' => '2026-01-01 00:00:00', 'status' => 'success', 'host' => 'web-1',
+    ]);
     // The queue module joins after boot, without its listeners: the index row is written here.
     DB::table(QueueModule::FAILED_JOBS)->insert([
         'uuid' => $uuid = 'u-1', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
@@ -178,15 +194,21 @@ it('describes the overview of the enabled modules', function () {
         ->and($metrics['failed_jobs_total'])->toMatchArray(['value' => 1, 'tone' => 'error', 'link' => 'queue'])
         ->and($metrics['tasks_attention'])->toMatchArray(['value' => 1, 'tone' => 'warning'])
         ->and($metrics['log_entries']['value'])->toBe(1)
-        ->and(apiWidget($page, 'exceptions')['rows'][0]['fingerprint'])->toBe(str_repeat('a', 40))
-        ->and(apiWidget($page, 'failed_jobs'))->toMatchArray(['link' => 'queue/failed-jobs/{uuid}', 'more' => 'queue', 'width' => 'half'])
+        ->and(collect($page['widgets'])->where('type', 'group')->pluck('key')->all())->toBe(['queue', 'exceptions', 'logs', 'schedule'])
+        ->and(apiWidget($page, 'queue'))->toMatchArray(['more' => 'queue', 'width' => 'half'])
+        ->and(array_column(apiWidget($page, 'queue')['widgets'], 'key'))->toBe(['throughput', 'failed_jobs'])
+        ->and(apiWidget($page, 'unresolved')['rows'][0]['fingerprint'])->toBe(str_repeat('a', 40))
+        ->and(apiWidget($page, 'failed_jobs'))->toMatchArray(['link' => 'queue/failed-jobs/{uuid}'])
         ->and(apiWidget($page, 'failed_jobs')['rows'][0]['uuid'])->toBe($uuid)
         ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
-        ->and(array_column(apiWidget($page, 'logs')['rows'], 'message'))->toBe(['Disk full'])
+        ->and(array_column(apiWidget($page, 'latest_logs')['rows'], 'message'))->toBe(['Disk full'])
+        ->and(apiWidget($page, 'logs')['widgets'][0])->toMatchArray(['key' => 'recorded', 'style' => 'bars'])
+        // Every task, those needing attention first.
+        ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'archive'])
         ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
 
     // Every link and "more" leads to a page of the API.
-    foreach (collect($page['widgets'])->flatMap(fn (array $widget) => array_filter([$widget['link'] ?? null, $widget['more'] ?? null])) as $link) {
+    foreach (apiWidgets($page)->flatMap(fn (array $widget) => array_filter([$widget['link'] ?? null, $widget['more'] ?? null])) as $link) {
         $path = preg_replace('/\{(\w+)\}/', '1', $link);
         expect(collect(apiRoutes())->contains(fn (Route $route) => $route->matches(Request::create('/spyglass/api/'.strtok($path, '?')), false)))->toBeTrue();
     }
@@ -198,7 +220,7 @@ it('leaves disabled modules out of the overview, without querying them', functio
 
     $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
 
-    expect(array_column($page['widgets'], 'key'))->not->toContain('failed_jobs', 'throughput', 'exceptions', 'unresolved_exceptions')->toContain('tasks', 'logs')
+    expect(apiWidgets($page)->pluck('key')->all())->not->toContain('queue', 'failed_jobs', 'throughput', 'exceptions', 'unresolved', 'unresolved_exceptions')->toContain('schedule', 'tasks', 'logs')
         ->and(collect(Spyglass::connection()->getQueryLog())->pluck('query')->implode(' '))->not->toContain('spyglass_queue', 'spyglass_groups');
 });
 

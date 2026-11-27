@@ -1,11 +1,11 @@
 import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Select } from '@base-ui/react/select';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { StrictMode, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './app.css';
-import { api, ApiError, href, navigate, setParams, useLocation, type Choice, type Filter, type MetricWidget, type Page as PageData } from './lib';
-import { card, Details, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
+import { api, ApiError, href, navigate, setParams, useLocation, type Choice, type Filter, type GroupWidget, type MetricWidget, type Page as PageData, type Widget } from './lib';
+import { card, Details, Group, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
 
 const client = new QueryClient({
     defaultOptions: {
@@ -165,6 +165,12 @@ function renderWidgets(page: PageData, ignored: (filters: string[]) => string[],
         metrics = [];
     };
 
+    const body = (widget: Exclude<Widget, MetricWidget | GroupWidget>): ReactNode => {
+        if (widget.type === 'table') return <Table widget={widget} ignored={ignored(widget.filters)} filtered={filtered} page={pageParam} />;
+        if (widget.type === 'series') return <Series widget={widget} ignored={ignored(widget.filters)} />;
+        return <Details widget={widget} />;
+    };
+
     for (const widget of page.widgets) {
         if (widget.type === 'metric') {
             metrics.push(widget);
@@ -173,24 +179,19 @@ function renderWidgets(page: PageData, ignored: (filters: string[]) => string[],
 
         flush();
 
-        if (widget.type === 'table')
-            nodes.push(
-                <Span key={widget.key} half={widget.width === 'half'}>
-                    <Table widget={widget} ignored={ignored(widget.filters)} filtered={filtered} page={pageParam} />
-                </Span>,
-            );
-        if (widget.type === 'series')
-            nodes.push(
-                <Span key={widget.key} half={widget.width === 'half'}>
-                    <Series widget={widget} ignored={ignored(widget.filters)} />
-                </Span>,
-            );
-        if (widget.type === 'details')
-            nodes.push(
-                <Span key={widget.key}>
-                    <Details widget={widget} />
-                </Span>,
-            );
+        nodes.push(
+            <Span key={widget.key} half={'width' in widget && widget.width === 'half'}>
+                {widget.type === 'group' ? (
+                    <Group widget={widget}>
+                        {widget.widgets.map((child) => (
+                            <Fragment key={child.key}>{body(child)}</Fragment>
+                        ))}
+                    </Group>
+                ) : (
+                    body(widget)
+                )}
+            </Span>,
+        );
     }
 
     flush();

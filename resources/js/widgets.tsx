@@ -14,6 +14,7 @@ import {
     type Action,
     type DetailsWidget,
     type Field,
+    type GroupWidget,
     type MetricWidget,
     type Row,
     type SeriesWidget,
@@ -151,15 +152,45 @@ const tints: Partial<Record<Tone, string>> = {
     warning: 'border-[color-mix(in_oklab,var(--surface)_78%,var(--warning))] bg-[color-mix(in_oklab,var(--surface)_94%,var(--warning))]',
 };
 
+/** Inside a group a widget has no card of its own, and a lower heading. */
+const Nested = createContext(false);
+
+function useBox(): string {
+    return useContext(Nested) ? 'border-t border-line' : card;
+}
+
 function Heading({ label, ignored, children }: { label: string; ignored: string[]; children?: ReactNode }) {
+    const nested = useContext(Nested);
+    const Tag = nested ? 'h3' : 'h2';
+
     return (
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 pt-4 pb-3">
-            <h2 className="font-semibold tracking-tight">
+        <div className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 pb-3 ${nested ? 'pt-3' : 'pt-4'}`}>
+            <Tag className={nested ? 'text-[13px] font-medium text-muted' : 'font-semibold tracking-tight'}>
                 {label}
                 {ignored.length > 0 && <span className="ml-2 text-xs font-normal text-muted">Not filtered by {ignored.join(', ')}</span>}
-            </h2>
+            </Tag>
             {children}
         </div>
+    );
+}
+
+function ViewAll({ to }: { to: string }) {
+    return (
+        <Link to={to} className="link font-medium text-accent-ink pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
+            View all
+        </Link>
+    );
+}
+
+/** The widgets of one subject in a single card. */
+export function Group({ widget, children }: { widget: GroupWidget; children: ReactNode }) {
+    return (
+        <section className={`${card} h-full`}>
+            <Heading label={widget.label} ignored={[]}>
+                {widget.more && <ViewAll to={widget.more} />}
+            </Heading>
+            <Nested.Provider value={true}>{children}</Nested.Provider>
+        </section>
     );
 }
 
@@ -253,6 +284,7 @@ function Actions({ actions, row = {} }: { actions: Action[]; row?: Row }) {
 }
 
 export function Table({ widget, ignored, filtered, page }: { widget: TableWidget; ignored: string[]; filtered: boolean; page: number | null }) {
+    const box = useBox();
     const { pagination, link } = widget;
     const current = page ?? pagination?.page ?? 1;
     const pages = pagination?.total != null ? Math.max(1, Math.ceil(pagination.total / pagination.per_page)) : null;
@@ -264,15 +296,11 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
     };
 
     return (
-        <section className={card}>
+        <section className={box}>
             <Heading label={widget.label} ignored={ignored}>
                 <div className="flex items-center gap-4">
                     {pagination?.total != null && <span className="text-muted tabular-nums">{formatNumber(pagination.total)} total</span>}
-                    {widget.more && (
-                        <Link to={widget.more} className="link font-medium text-accent-ink pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
-                            View all
-                        </Link>
-                    )}
+                    {widget.more && <ViewAll to={widget.more} />}
                 </div>
             </Heading>
             {widget.rows.length === 0 ? (
@@ -341,8 +369,9 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
 const alignRight = (field: Field) => field.type === 'number' || field.type === 'duration';
 
 export function Details({ widget }: { widget: DetailsWidget }) {
+    const box = useBox();
     return (
-        <section className={card}>
+        <section className={box}>
             <Heading label={widget.label} ignored={[]}>
                 {widget.actions.length > 0 && <Actions actions={widget.actions} />}
             </Heading>
@@ -368,6 +397,7 @@ const pad = { top: 12, right: 12, bottom: 24, left: 44 };
  * zero, at the smallest step between points.
  */
 export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: string[] }) {
+    const box = useBox();
     const [hover, setHover] = useState<number | null>(null);
     // Drawn at the width it is shown at, so labels keep their size on a phone.
     const frame = useRef<HTMLDivElement>(null);
@@ -413,7 +443,7 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
     };
 
     return (
-        <section className={card}>
+        <section className={box}>
             <Heading label={widget.label} ignored={ignored}>
                 <ul className="flex flex-wrap gap-x-4 gap-y-1 text-muted">
                     {widget.lines.map((item, index) => (

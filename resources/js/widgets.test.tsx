@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
-import { change, Details, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { change, Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -205,6 +205,22 @@ describe('Metrics', () => {
         expect(screen.getByRole('link', { name: /Failed jobs/ }).getAttribute('href')).toBe('/queue');
         expect(screen.getByText('9').className).toContain('text-error');
         expect(screen.queryByRole('link', { name: /Processed/ })).toBeNull();
+    });
+});
+
+describe('Group', () => {
+    it('draws its widgets in one card, under its heading and link', () => {
+        const table: TableWidget = { type: 'table', key: 'jobs', label: 'Latest failed jobs', columns: [field('text')], rows: [{ v: 'A' }], pagination: null, link: null, actions: [], filters: [] };
+        const { container } = wrap(
+            <Group widget={{ type: 'group', key: 'queue', label: 'Queue', widgets: [table], filters: [], more: 'queue' }}>
+                <Table widget={table} ignored={[]} filtered={false} page={null} />
+            </Group>,
+        );
+
+        expect(screen.getByRole('heading', { level: 2, name: 'Queue' })).toBeTruthy();
+        expect(screen.getByRole('heading', { level: 3, name: 'Latest failed jobs' })).toBeTruthy();
+        expect(screen.getByRole('link', { name: 'View all' }).getAttribute('href')).toBe('/queue');
+        expect(container.querySelectorAll('section.rounded-\\[1\\.25rem\\]')).toHaveLength(1);
     });
 });
 

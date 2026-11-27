@@ -148,6 +148,18 @@ final class Widget
     }
 
     /**
+     * Tables, series and details about one subject, drawn as a single card. `$more` leads to its page and
+     * `$width` `half` lets two groups share a row.
+     *
+     * @param  list<array<string, mixed>>  $widgets
+     * @return array<string, mixed>
+     */
+    public static function group(string $key, string $label, array $widgets, ?string $more = null, ?string $width = null): array
+    {
+        return ['type' => 'group', 'key' => $key, 'label' => $label, 'widgets' => $widgets, 'filters' => [], ...array_filter(compact('more', 'width'), fn ($option) => $option !== null)];
+    }
+
+    /**
      * @param  list<Field>  $fields
      * @param  array<string, mixed>  $values
      * @param  list<Action>  $actions
