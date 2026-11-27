@@ -9,7 +9,8 @@ return [
 
     /*
      * Dashboard URI prefix and route middleware. Access is always checked
-     * with the `viewSpyglass` gate or the `Spyglass::auth()` callback.
+     * with the `viewSpyglass` gate or the `Spyglass::auth()` callback. The actions
+     * always check the CSRF token, so the middleware must start the session (`web`).
      */
     'path' => env('SPYGLASS_PATH', 'spyglass'),
 

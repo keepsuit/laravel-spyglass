@@ -8,34 +8,6 @@ use Keepsuit\Spyglass\Tests\Fixtures\WithExceptionsModule;
 
 uses(WithExceptionsModule::class);
 
-function seedExceptionGroup(string $fingerprint, array $group = [], array $scopes = []): void
-{
-    DB::table(ExceptionsModule::GROUPS)->insert([
-        'kind' => 'exception',
-        'signature' => $fingerprint,
-        'class' => RuntimeException::class,
-        'message' => 'Boom',
-        'file' => 'app/Foo.php',
-        'line' => 1,
-        'count' => 1,
-        'first_seen_at' => '2026-03-01 10:00:00',
-        'last_seen_at' => '2026-03-01 10:00:00',
-        ...$group,
-    ]);
-
-    foreach ($scopes as $scope) {
-        DB::table(ExceptionsModule::OCCURRENCES)->insert([
-            'kind' => 'exception',
-            'signature' => $fingerprint,
-            'recorded_at' => '2026-03-01 10:00:00',
-            'message' => 'Boom',
-            'body' => '[]',
-            'source_type' => 'command',
-            'scope' => $scope,
-        ]);
-    }
-}
-
 function exceptionQueries(): ExceptionQueries
 {
     return app(ExceptionQueries::class);

@@ -226,7 +226,7 @@ class QueueModule extends Module
             'fingerprint' => ExceptionFingerprint::for($event->exception),
             'scope' => $snapshot['scope'] === null ? null : Text::clip($snapshot['scope'], 191),
             'context' => $snapshot['context'],
-            'failed_at' => now()->toDateTimeString(),
+            'failed_at' => now()->utc()->toDateTimeString(),
         ]);
     }
 

@@ -89,3 +89,34 @@ function sourcesTable(): Builder
         ->select(['id', 'kind', 'signature', 'source_type', 'source_hash', 'source', 'count', 'last_seen_at'])
         ->where('source_type', '!=', '');
 }
+
+/**
+ * An exception group total row, with an occurrence per scope.
+ */
+function seedExceptionGroup(string $fingerprint, array $group = [], array $scopes = []): void
+{
+    DB::table(Sources::GROUPS)->insert([
+        'kind' => 'exception',
+        'signature' => $fingerprint,
+        'class' => RuntimeException::class,
+        'message' => 'Boom',
+        'file' => 'app/Foo.php',
+        'line' => 1,
+        'count' => 1,
+        'first_seen_at' => '2026-03-01 10:00:00',
+        'last_seen_at' => '2026-03-01 10:00:00',
+        ...$group,
+    ]);
+
+    foreach ($scopes as $scope) {
+        DB::table(Sources::ENTRIES)->insert([
+            'kind' => 'exception',
+            'signature' => $fingerprint,
+            'recorded_at' => '2026-03-01 10:00:00',
+            'message' => 'Boom',
+            'body' => '[]',
+            'source_type' => 'command',
+            'scope' => $scope,
+        ]);
+    }
+}

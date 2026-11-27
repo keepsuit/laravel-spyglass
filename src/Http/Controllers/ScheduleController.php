@@ -1,0 +1,105 @@
+<?php
+
+namespace Keepsuit\Spyglass\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Keepsuit\Spyglass\Dashboard\Widget;
+use Keepsuit\Spyglass\Modules\Schedule\ScheduleQueries;
+use Keepsuit\Spyglass\Spyglass;
+
+/**
+ * @internal
+ */
+class ScheduleController extends Controller
+{
+    protected const array TONES = ['success' => 'ok', 'running' => 'info', 'interrupted' => 'warning', 'failed' => 'error'];
+
+    public function __construct(Spyglass $spyglass, protected ScheduleQueries $queries)
+    {
+        parent::__construct($spyglass);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function index(): array
+    {
+        return Widget::page('Schedule', [
+            Widget::table('tasks', 'Tasks', [
+                Widget::field('label', 'Task'),
+                Widget::field('expression', 'Expression'),
+                Widget::field('last_status', 'Last run', 'status', self::TONES),
+                Widget::field('last_started_at', 'Last started at', 'datetime'),
+                Widget::field('last_duration_ms', 'Duration', 'duration'),
+                Widget::field('next_run', 'Next run', 'datetime'),
+                Widget::field('missed', 'Missed', 'boolean'),
+                Widget::field('stale', 'Removed', 'boolean'),
+            ], $this->queries->tasks()->map($this->flatten(...)), link: 'schedule/{key}'),
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function show(Request $request, string $task): array
+    {
+        $page = $this->page($request);
+        $details = $this->queries->tasks()->firstWhere('key', $task);
+
+        abort_if($details === null, 404);
+
+        $runs = $this->queries->runs($task, page: $page);
+
+        return Widget::page($details['label'], [
+            Widget::details('task', 'Task', [
+                Widget::field('label', 'Task'),
+                Widget::field('command', 'Command'),
+                Widget::field('description', 'Description'),
+                Widget::field('expression', 'Expression'),
+                Widget::field('repeat_seconds', 'Repeats every (s)', 'number'),
+                Widget::field('timezone', 'Timezone'),
+                Widget::field('environments', 'Environments', 'json'),
+                Widget::field('without_overlapping', 'Without overlapping', 'boolean'),
+                Widget::field('next_run', 'Next run', 'datetime'),
+                Widget::field('missed', 'Missed', 'boolean'),
+                Widget::field('overlapping', 'Overlapping', 'boolean'),
+                Widget::field('stale', 'Removed', 'boolean'),
+                Widget::field('last_skipped_at', 'Last skipped at', 'datetime'),
+                Widget::field('last_skip_reason', 'Last skip reason'),
+                Widget::field('first_seen_at', 'First seen at', 'datetime'),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
+            ], $this->flatten($details)),
+            Widget::table('runs', 'Runs', [
+                Widget::field('started_at', 'Started at', 'datetime'),
+                Widget::field('status', 'Status', 'status', self::TONES),
+                Widget::field('duration_ms', 'Duration', 'duration'),
+                Widget::field('exit_code', 'Exit code', 'number'),
+                Widget::field('overlapped', 'Overlapped', 'boolean'),
+                Widget::field('exception', 'Exception', 'link'),
+                Widget::field('host', 'Host'),
+                Widget::field('scope_label', 'Scope'),
+                Widget::field('output', 'Output'),
+            ], array_map(
+                fn (array $run) => [...$run, 'exception' => $this->exceptionLink($run['exception_class'], $run['fingerprint'])],
+                $this->rows($runs->items()),
+            ), $runs),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $task
+     * @return array<string, mixed>
+     */
+    protected function flatten(array $task): array
+    {
+        $run = $task['last_run'] ?? [];
+        unset($task['last_run']);
+
+        return [
+            ...$task,
+            'last_status' => $run['status'] ?? null,
+            'last_started_at' => $run['started_at'] ?? null,
+            'last_duration_ms' => $run['duration_ms'] ?? null,
+        ];
+    }
+}

@@ -3,6 +3,7 @@
 use Illuminate\Foundation\Console\ClosureCommand;
 use Illuminate\Queue\Console\RetryCommand;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
@@ -214,10 +215,22 @@ it('reads queue sizes and leaves them empty when the driver cannot report them',
     ]);
 });
 
-it('returns the failer record of a failed job', function () {
+it('returns the failer record of a failed job with its index row, in UTC', function () {
+    // Laravel applies `app.timezone` at boot.
+    config(['app.timezone' => 'Europe/Rome']);
+    date_default_timezone_set('Europe/Rome');
+    $this->beforeApplicationDestroyed(fn () => date_default_timezone_set('UTC'));
+    Date::setTestNow(Date::parse('2026-01-01 11:00:00', 'UTC'));
+
     $uuid = queueFailJob();
 
-    expect(queueQueries()->failedJob($uuid))->toHaveProperty('payload');
+    expect(DB::table(QueueModule::FAILED_JOBS)->value('failed_at'))->toBe('2026-01-01 11:00:00')
+        ->and(queueQueries()->failedJob($uuid))->toHaveKey('payload')->toMatchArray([
+            'uuid' => $uuid,
+            'job' => QueueJob::class,
+            'attempts' => 1,
+            'failed_at' => '2026-01-01 11:00:00',
+        ]);
 });
 
 it('retries and deletes failed jobs through the failer', function (string $method, string $driver) {

@@ -8,6 +8,7 @@ use Illuminate\Console\Events\ScheduledTaskSkipped;
 use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Access\Gate;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Log\LogManager;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
@@ -16,8 +17,16 @@ use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Commands\PruneCommand;
+use Keepsuit\Spyglass\Http\Controllers\ExceptionsController;
+use Keepsuit\Spyglass\Http\Controllers\HealthController;
+use Keepsuit\Spyglass\Http\Controllers\LogsController;
+use Keepsuit\Spyglass\Http\Controllers\QueueController;
+use Keepsuit\Spyglass\Http\Controllers\ScheduleController;
+use Keepsuit\Spyglass\Http\Middleware\AcceptJson;
 use Keepsuit\Spyglass\Http\Middleware\Authorize;
+use Keepsuit\Spyglass\Http\Middleware\EnsureModuleEnabled;
 use Keepsuit\Spyglass\Support\Sources;
 use Monolog\Handler\NoopHandler;
 use Monolog\Logger;
@@ -151,6 +160,51 @@ class SpyglassServiceProvider extends PackageServiceProvider
             ->name('spyglass.')
             ->group(function () {
                 Route::get('/', fn () => response()->noContent())->name('index');
+
+                // The class the `web` group uses, so the check runs once: Laravel 13 renamed it.
+                $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : 'Illuminate\Foundation\Http\Middleware\ValidateCsrfToken';
+
+                Route::prefix('api')->middleware(AcceptJson::class)->name('api.')->group(function () use ($csrf) {
+                    Route::get('/', fn (Spyglass $spyglass) => ['modules' => array_map(
+                        fn (string $module) => ['key' => $module, 'label' => Str::headline($module)],
+                        array_keys($spyglass->modules()),
+                    )])->name('modules');
+
+                    Route::middleware(EnsureModuleEnabled::class.':schedule')->group(function () {
+                        Route::get('schedule', [ScheduleController::class, 'index'])->name('schedule');
+                        Route::get('schedule/{task}', [ScheduleController::class, 'show'])->name('schedule.show');
+                    });
+
+                    Route::middleware(EnsureModuleEnabled::class.':queue')->group(function () use ($csrf) {
+                        Route::get('queue', [QueueController::class, 'index'])->name('queue');
+                        Route::get('queue/failed-jobs/{uuid}', [QueueController::class, 'show'])->name('queue.failed-jobs.show');
+
+                        // Also when `spyglass.middleware` leaves out the `web` group, which normally checks it.
+                        Route::middleware($csrf)->group(function () {
+                            Route::post('queue/failed-jobs/{uuid}/retry', [QueueController::class, 'retry'])->name('queue.failed-jobs.retry');
+                            Route::post('queue/failed-jobs/{uuid}/delete', [QueueController::class, 'delete'])->name('queue.failed-jobs.delete');
+                        });
+                    });
+
+                    Route::middleware(EnsureModuleEnabled::class.':exceptions')->group(function () use ($csrf) {
+                        Route::get('exceptions', [ExceptionsController::class, 'index'])->name('exceptions');
+                        Route::get('exceptions/{fingerprint}', [ExceptionsController::class, 'show'])->name('exceptions.show');
+
+                        Route::middleware($csrf)->group(function () {
+                            Route::post('exceptions/{fingerprint}/resolve', [ExceptionsController::class, 'resolve'])->name('exceptions.resolve');
+                            Route::post('exceptions/{fingerprint}/reopen', [ExceptionsController::class, 'reopen'])->name('exceptions.reopen');
+                        });
+                    });
+
+                    Route::middleware(EnsureModuleEnabled::class.':logs')->group(function () {
+                        Route::get('logs', [LogsController::class, 'index'])->name('logs');
+                        Route::get('logs/{id}', [LogsController::class, 'show'])->whereNumber('id')->name('logs.show');
+                    });
+
+                    Route::middleware(EnsureModuleEnabled::class.':health')->group(function () {
+                        Route::get('health', [HealthController::class, 'index'])->name('health');
+                    });
+                });
             });
     }
 }
