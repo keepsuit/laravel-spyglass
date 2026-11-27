@@ -4,6 +4,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Vite;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 
@@ -32,6 +33,17 @@ it('serves the application shell on the dashboard paths', function (string $path
 
 it('passes the CSRF token to the application', function () {
     $this->withSession([])->get('/spyglass')->assertSee('data-csrf="'.csrf_token().'"', false);
+});
+
+it('gives the assets the Content Security Policy nonce of the application', function () {
+    $this->get('/spyglass')->assertDontSee('nonce=', false);
+
+    Vite::useCspNonce('abc123');
+    $assets = dashboardAssets();
+
+    $this->get('/spyglass')
+        ->assertSee("src=\"/spyglass/{$assets['js']}\" nonce=\"abc123\"", false)
+        ->assertSee("href=\"/spyglass/{$assets['css']}\" nonce=\"abc123\"", false);
 });
 
 it('leaves unknown API paths to the API', function () {

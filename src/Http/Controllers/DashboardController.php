@@ -2,8 +2,9 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Vite;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -23,31 +24,20 @@ class DashboardController
 
     protected const array TYPES = ['js' => 'text/javascript; charset=utf-8', 'css' => 'text/css; charset=utf-8'];
 
-    public function index(Request $request): Response
+    public function index(Request $request): View
     {
         $entry = $this->manifest()[self::ENTRY];
         // The path only: the host the browser used may differ from the one Laravel would put in a URL.
         $base = rtrim((string) parse_url(route('spyglass.index'), PHP_URL_PATH), '/');
-        $styles = implode('', array_map(fn (string $file) => '<link rel="stylesheet" href="'.e("{$base}/{$file}").'">', $entry['css'] ?? []));
-        $script = e("{$base}/{$entry['file']}");
-        $data = 'data-base="'.e($base).'" data-csrf="'.e($request->hasSession() ? csrf_token() : '').'"';
 
-        return response(<<<HTML
-            <!doctype html>
-            <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta name="robots" content="noindex, nofollow">
-                <title>Spyglass</title>
-                {$styles}
-                <script type="module" src="{$script}"></script>
-            </head>
-            <body>
-                <div id="spyglass" {$data}></div>
-            </body>
-            </html>
-            HTML);
+        return view('spyglass::dashboard', [
+            'base' => $base,
+            'styles' => array_map(fn (string $file) => "{$base}/{$file}", $entry['css'] ?? []),
+            'script' => "{$base}/{$entry['file']}",
+            'csrf' => $request->hasSession() ? csrf_token() : '',
+            // The nonce the application gives its own Vite tags, for a Content Security Policy.
+            'nonce' => Vite::cspNonce(),
+        ]);
     }
 
     public function asset(string $file): BinaryFileResponse

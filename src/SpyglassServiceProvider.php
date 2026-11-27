@@ -72,6 +72,9 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
     public function packageBooted(): void
     {
+        // Not through `hasViews()`, which would also offer the view for publishing: the page is internal.
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'spyglass');
+
         // Resolving here pins the connection and cache store names before anything
         // (e.g. tenancy) can switch the application defaults at runtime.
         $spyglass = $this->app->make(Spyglass::class);
