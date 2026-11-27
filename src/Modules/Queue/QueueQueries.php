@@ -8,6 +8,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Queue;
 use Keepsuit\Spyglass\Spyglass;
 use Throwable;
@@ -80,17 +81,30 @@ class QueueQueries
     }
 
     /**
-     * The failer record, with payload and exception. Null when it is gone, and the index row is removed.
+     * The failer record (connection, queue, payload, exception) with the index columns, `uuid` and `failed_at`
+     * as a UTC string. Null when it is gone from the failer, and the index row is removed.
+     *
+     * @return array<string, mixed>|null
      */
-    public function failedJob(string $uuid): ?object
+    public function failedJob(string $uuid): ?array
     {
         $record = app(FailedJobProviderInterface::class)->find($uuid);
 
         if ($record === null) {
             $this->forgetIndexRow($uuid);
+
+            return null;
         }
 
-        return $record;
+        $index = $this->spyglass->connection()->table(QueueModule::FAILED_JOBS)->where('uuid', $uuid)->first();
+
+        return [
+            ...(array) $record,
+            ...array_diff_key((array) $index, ['id' => true]),
+            'uuid' => $uuid,
+            // The failer stores it in the application's timezone.
+            'failed_at' => Date::parse(data_get($record, 'failed_at'), config('app.timezone'))->utc()->toDateTimeString(),
+        ];
     }
 
     /**
@@ -193,7 +207,7 @@ class QueueQueries
     {
         $this->spyglass->connection()->table(QueueModule::FAILED_JOBS)
             ->where('uuid', $uuid)
-            ->when($failedBefore, fn (Builder $query, CarbonInterface $before) => $query->where('failed_at', '<=', $before->toDateTimeString()))
+            ->when($failedBefore, fn (Builder $query, CarbonInterface $before) => $query->where('failed_at', '<=', $this->utc($before)))
             ->delete();
     }
 

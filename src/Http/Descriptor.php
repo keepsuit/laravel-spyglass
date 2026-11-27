@@ -12,17 +12,18 @@ use Illuminate\Support\Facades\Date;
  *
  * Links and action URLs are relative to the API root, which mirrors the dashboard's own paths. In a table they
  * are templates: `{column}` is replaced with the row's value. Actions are POST requests. Datetimes are ISO 8601 UTC.
+ * Each widget lists the page filters it responds to: the others do not change it.
  *
  * @internal
  *
- * @phpstan-type Field array{key: string, label: string, type: string}
+ * @phpstan-type Field array{key: string, label: string, type: string, tones?: array<string, string>}
  * @phpstan-type Action array{key: string, label: string, url: string}
  * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>}
  */
 final class Descriptor
 {
     /**
-     * Filters are query parameters applied to every widget of the page, as is `page` to its paginated table.
+     * `page` selects the page of the paginated table.
      *
      * @param  list<array<string, mixed>>  $widgets
      * @param  list<Filter>  $filters
@@ -34,11 +35,12 @@ final class Descriptor
     }
 
     /**
+     * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function metric(string $key, string $label, int|float|string|null $value, ?string $unit = null): array
+    public static function metric(string $key, string $label, int|float|string|null $value, array $filters = []): array
     {
-        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'unit' => $unit];
+        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'filters' => $filters];
     }
 
     /**
@@ -46,6 +48,7 @@ final class Descriptor
      * @param  iterable<array<string, mixed>>  $rows
      * @param  Paginator<int, mixed>|null  $paginator
      * @param  list<Action>  $actions
+     * @param  list<string>  $filters
      * @return array<string, mixed>
      */
     public static function table(
@@ -56,13 +59,17 @@ final class Descriptor
         ?Paginator $paginator = null,
         ?string $link = null,
         array $actions = [],
+        array $filters = [],
     ): array {
+        // Row values the templates need, shown or not.
+        preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
+
         return [
             'type' => 'table',
             'key' => $key,
             'label' => $label,
             'columns' => $columns,
-            'rows' => self::rows($columns, $rows),
+            'rows' => self::rows($columns, $rows, $placeholders[1]),
             'pagination' => $paginator === null ? null : [
                 'page' => $paginator->currentPage(),
                 'per_page' => $paginator->perPage(),
@@ -71,6 +78,7 @@ final class Descriptor
             ],
             'link' => $link,
             'actions' => $actions,
+            'filters' => $filters,
         ];
     }
 
@@ -79,9 +87,10 @@ final class Descriptor
      *
      * @param  list<array{key: string, label: string}>  $lines
      * @param  iterable<array<string, mixed>>  $points
+     * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function series(string $key, string $label, string $x, array $lines, iterable $points): array
+    public static function series(string $key, string $label, string $x, array $lines, iterable $points, array $filters = []): array
     {
         $columns = [self::field($x, $x, 'datetime')];
 
@@ -89,7 +98,7 @@ final class Descriptor
             $columns[] = self::field($line['key'], $line['label'], 'number');
         }
 
-        return ['type' => 'series', 'key' => $key, 'label' => $label, 'x' => $x, 'lines' => $lines, 'points' => self::rows($columns, $points)];
+        return ['type' => 'series', 'key' => $key, 'label' => $label, 'x' => $x, 'lines' => $lines, 'points' => self::rows($columns, $points), 'filters' => $filters];
     }
 
     /**
@@ -108,17 +117,26 @@ final class Descriptor
             'label' => $label,
             'items' => array_map(fn (array $field) => $field + ['value' => $values[$field['key']]], $fields),
             'actions' => $actions,
+            'filters' => [],
         ];
     }
 
     /**
-     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status or json.
+     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json or link
+     * (`{label, url}`, url null when not linkable). A status maps its values to the tones ok, info, warning and error; others are neutral.
      *
+     * @param  array<string, string>|null  $tones
      * @return Field
      */
-    public static function field(string $key, string $label, string $type = 'text'): array
+    public static function field(string $key, string $label, string $type = 'text', ?array $tones = null): array
     {
-        return ['key' => $key, 'label' => $label, 'type' => $type];
+        $field = ['key' => $key, 'label' => $label, 'type' => $type];
+
+        if ($tones !== null) {
+            $field['tones'] = $tones;
+        }
+
+        return $field;
     }
 
     /**
@@ -144,23 +162,36 @@ final class Descriptor
     }
 
     /**
-     * Rows keep every value, so link and action templates can use columns that are not shown.
+     * A null `$url` shows the label without a link.
+     *
+     * @return array{label: string, url: ?string}|null
+     */
+    public static function link(?string $label, ?string $url): ?array
+    {
+        return $label === null ? null : ['label' => $label, 'url' => $url];
+    }
+
+    /**
+     * Only declared values leave the server: rows can hold payloads or context that no column shows.
      *
      * @param  list<Field>  $fields
      * @param  iterable<array<string, mixed>>  $rows
+     * @param  list<string>  $keep  undeclared keys kept as they are
      * @return list<array<string, mixed>>
      */
-    protected static function rows(array $fields, iterable $rows): array
+    protected static function rows(array $fields, iterable $rows, array $keep = []): array
     {
         $types = array_column($fields, 'type', 'key');
         $result = [];
 
         foreach ($rows as $row) {
+            $values = array_intersect_key($row, array_flip($keep));
+
             foreach ($types as $key => $type) {
-                $row[$key] = self::value($row[$key] ?? null, $type);
+                $values[$key] = self::value($row[$key] ?? null, $type);
             }
 
-            $result[] = $row;
+            $result[] = $values;
         }
 
         return $result;

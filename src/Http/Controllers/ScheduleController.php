@@ -12,6 +12,8 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class ScheduleController extends Controller
 {
+    protected const array TONES = ['success' => 'ok', 'running' => 'info', 'interrupted' => 'warning', 'failed' => 'error'];
+
     public function __construct(Spyglass $spyglass, protected ScheduleQueries $queries)
     {
         parent::__construct($spyglass);
@@ -26,7 +28,7 @@ class ScheduleController extends Controller
             D::table('tasks', 'Tasks', [
                 D::field('label', 'Task'),
                 D::field('expression', 'Expression'),
-                D::field('last_status', 'Last run', 'status'),
+                D::field('last_status', 'Last run', 'status', self::TONES),
                 D::field('last_started_at', 'Last started at', 'datetime'),
                 D::field('last_duration_ms', 'Duration', 'duration'),
                 D::field('next_run', 'Next run', 'datetime'),
@@ -41,12 +43,12 @@ class ScheduleController extends Controller
      */
     public function show(Request $request, string $task): array
     {
-        $this->filters($request, []);
+        $page = $this->page($request);
         $details = $this->queries->tasks()->firstWhere('key', $task);
 
         abort_if($details === null, 404);
 
-        $runs = $this->queries->runs($task, page: $this->page($request));
+        $runs = $this->queries->runs($task, page: $page);
 
         return D::page($details['label'], [
             D::details('task', 'Task', [
@@ -69,15 +71,18 @@ class ScheduleController extends Controller
             ], $this->flatten($details)),
             D::table('runs', 'Runs', [
                 D::field('started_at', 'Started at', 'datetime'),
-                D::field('status', 'Status', 'status'),
+                D::field('status', 'Status', 'status', self::TONES),
                 D::field('duration_ms', 'Duration', 'duration'),
                 D::field('exit_code', 'Exit code', 'number'),
                 D::field('overlapped', 'Overlapped', 'boolean'),
-                D::field('exception_class', 'Exception'),
+                D::field('exception', 'Exception', 'link'),
                 D::field('host', 'Host'),
                 D::field('scope_label', 'Scope'),
                 D::field('output', 'Output'),
-            ], $this->rows($runs->items()), $runs),
+            ], array_map(
+                fn (array $run) => [...$run, 'exception' => $this->exceptionLink($run['exception_class'], $run['fingerprint'])],
+                $this->rows($runs->items()),
+            ), $runs),
         ]);
     }
 

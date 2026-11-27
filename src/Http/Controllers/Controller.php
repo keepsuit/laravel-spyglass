@@ -3,6 +3,7 @@
 namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Keepsuit\Spyglass\Http\Descriptor as D;
 use Keepsuit\Spyglass\Spyglass;
 
 /**
@@ -22,17 +23,17 @@ abstract class Controller
      */
     protected function filters(Request $request, array $rules): array
     {
-        $validated = $request->validate([
-            'page' => ['sometimes', 'integer', 'min:1'],
-            ...array_map(fn (string $rule) => ['sometimes', 'nullable', 'string', ...array_filter([$rule])], $rules),
-        ]);
+        $validated = $request->validate(array_map(fn (string $rule) => ['sometimes', 'nullable', 'string', ...array_filter([$rule])], $rules));
 
         return array_filter(array_intersect_key($validated, $rules), fn ($value) => $value !== null && $value !== '');
     }
 
     protected function page(Request $request): int
     {
-        return max(1, $request->integer('page', 1));
+        // Bounded: the offset computed from a huge page overflows.
+        $request->validate(['page' => ['sometimes', 'integer', 'min:1', 'max:10000']]);
+
+        return $request->integer('page', 1);
     }
 
     /**
@@ -54,5 +55,31 @@ abstract class Controller
         }
 
         return $rows;
+    }
+
+    /**
+     * Where an exception group or a log message came from.
+     *
+     * @param  array<int, object>  $sources
+     * @return array<string, mixed>
+     */
+    protected function sources(array $sources): array
+    {
+        return D::table('sources', 'Sources', [
+            D::field('source_type', 'Type'),
+            D::field('source', 'Source'),
+            D::field('count', 'Count', 'number'),
+            D::field('last_seen_at', 'Last seen at', 'datetime'),
+        ], $this->rows($sources));
+    }
+
+    /**
+     * The exception class, linked to its group while the exceptions module is enabled.
+     *
+     * @return array{label: string, url: ?string}|null
+     */
+    protected function exceptionLink(?string $class, ?string $fingerprint): ?array
+    {
+        return D::link($class, $fingerprint === null || ! config('spyglass.modules.exceptions.enabled') ? null : "exceptions/{$fingerprint}");
     }
 }

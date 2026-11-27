@@ -12,7 +12,10 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class LogsController extends Controller
 {
-    protected const array LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'];
+    protected const array TONES = [
+        'emergency' => 'error', 'alert' => 'error', 'critical' => 'error', 'error' => 'error',
+        'warning' => 'warning', 'notice' => 'info', 'info' => 'info', 'debug' => 'info',
+    ];
 
     public function __construct(Spyglass $spyglass, protected LogQueries $queries)
     {
@@ -24,20 +27,20 @@ class LogsController extends Controller
      */
     public function index(Request $request): array
     {
-        $filters = $this->filters($request, ['level' => 'in:'.implode(',', self::LEVELS), 'scope' => '']);
+        $filters = $this->filters($request, ['level' => 'in:'.implode(',', array_keys(self::TONES)), 'scope' => '']);
         $entries = $this->queries->entries($filters, page: $this->page($request));
 
         return D::page('Logs', [
             D::table('entries', 'Logs', [
                 D::field('logged_at', 'Logged at', 'datetime'),
-                D::field('level', 'Level', 'status'),
+                D::field('level', 'Level', 'status', self::TONES),
                 D::field('message', 'Message'),
                 D::field('source_type', 'Source type'),
                 D::field('source', 'Source'),
                 D::field('scope_label', 'Scope'),
-            ], $this->rows($entries->items()), $entries, link: 'logs/{id}'),
+            ], $this->rows($entries->items()), $entries, link: 'logs/{id}', filters: ['level', 'scope']),
         ], [
-            D::filter('level', 'Level', $filters['level'] ?? null, array_combine(self::LEVELS, array_map('ucfirst', self::LEVELS))),
+            D::filter('level', 'Level', $filters['level'] ?? null, array_map(ucfirst(...), array_combine(array_keys(self::TONES), array_keys(self::TONES)))),
             D::filter('scope', 'Scope', $filters['scope'] ?? null),
         ]);
     }
@@ -56,7 +59,7 @@ class LogsController extends Controller
         return D::page('Log entry', [
             D::details('entry', 'Log entry', [
                 D::field('logged_at', 'Logged at', 'datetime'),
-                D::field('level', 'Level', 'status'),
+                D::field('level', 'Level', 'status', self::TONES),
                 D::field('message', 'Message'),
                 D::field('source_type', 'Source type'),
                 D::field('source', 'Source'),
@@ -65,12 +68,7 @@ class LogsController extends Controller
                 D::field('context', 'Context', 'json'),
                 D::field('log_context', 'Log context', 'json'),
             ], $entry),
-            D::table('sources', 'Sources', [
-                D::field('source_type', 'Type'),
-                D::field('source', 'Source'),
-                D::field('count', 'Count', 'number'),
-                D::field('last_seen_at', 'Last seen at', 'datetime'),
-            ], $this->rows($this->queries->sources((string) $entry['level'], (string) $entry['message']))),
+            $this->sources($this->queries->sources((string) $entry['level'], (string) $entry['message'])),
         ]);
     }
 }

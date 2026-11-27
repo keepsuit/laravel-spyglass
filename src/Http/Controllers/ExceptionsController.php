@@ -13,6 +13,8 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class ExceptionsController extends Controller
 {
+    protected const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
+
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {
         parent::__construct($spyglass);
@@ -41,7 +43,7 @@ class ExceptionsController extends Controller
                 D::field('location', 'Location'),
                 D::field('count', 'Count', 'number'),
                 D::field('last_seen_at', 'Last seen at', 'datetime'),
-                D::field('status', 'Status', 'status'),
+                D::field('status', 'Status', 'status', self::TONES),
             ], array_map($this->group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
         ], [
             D::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
@@ -55,13 +57,13 @@ class ExceptionsController extends Controller
      */
     public function show(Request $request, string $fingerprint): array
     {
-        $this->filters($request, []);
+        $page = $this->page($request);
         $group = $this->queries->group($fingerprint);
 
         abort_if($group === null, 404);
 
         $group = $this->group((array) $group);
-        $occurrences = $this->queries->occurrences($fingerprint, page: $this->page($request));
+        $occurrences = $this->queries->occurrences($fingerprint, page: $page);
 
         return D::page($group['class'], [
             D::details('group', 'Exception', [
@@ -69,7 +71,7 @@ class ExceptionsController extends Controller
                 D::field('message', 'Message'),
                 D::field('location', 'Location'),
                 D::field('count', 'Count', 'number'),
-                D::field('status', 'Status', 'status'),
+                D::field('status', 'Status', 'status', self::TONES),
                 D::field('first_seen_at', 'First seen at', 'datetime'),
                 D::field('last_seen_at', 'Last seen at', 'datetime'),
                 D::field('resolved_at', 'Resolved at', 'datetime'),
@@ -78,12 +80,7 @@ class ExceptionsController extends Controller
                     ? D::action('reopen', 'Reopen', "exceptions/{$fingerprint}/reopen")
                     : D::action('resolve', 'Resolve', "exceptions/{$fingerprint}/resolve"),
             ]),
-            D::table('sources', 'Sources', [
-                D::field('source_type', 'Type'),
-                D::field('source', 'Source'),
-                D::field('count', 'Count', 'number'),
-                D::field('last_seen_at', 'Last seen at', 'datetime'),
-            ], $this->rows($this->queries->sources($fingerprint))),
+            $this->sources($this->queries->sources($fingerprint)),
             D::table('occurrences', 'Occurrences', [
                 D::field('occurred_at', 'Occurred at', 'datetime'),
                 D::field('message', 'Message'),
@@ -101,18 +98,22 @@ class ExceptionsController extends Controller
 
     public function resolve(string $fingerprint): Response
     {
-        abort_if($this->queries->group($fingerprint) === null, 404);
-
-        $this->queries->resolve($fingerprint);
-
-        return response()->noContent();
+        return $this->setResolved($fingerprint, true);
     }
 
     public function reopen(string $fingerprint): Response
     {
+        return $this->setResolved($fingerprint, false);
+    }
+
+    /**
+     * Idempotent: a group already in that state is left as it is.
+     */
+    protected function setResolved(string $fingerprint, bool $resolved): Response
+    {
         abort_if($this->queries->group($fingerprint) === null, 404);
 
-        $this->queries->unresolve($fingerprint);
+        $resolved ? $this->queries->resolve($fingerprint) : $this->queries->unresolve($fingerprint);
 
         return response()->noContent();
     }

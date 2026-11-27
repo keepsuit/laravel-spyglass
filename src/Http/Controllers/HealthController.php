@@ -24,7 +24,7 @@ class HealthController extends Controller
         return D::page('Health', [
             D::table('checks', 'Checks', [
                 D::field('label', 'Check'),
-                D::field('status', 'Status', 'status'),
+                D::field('status', 'Status', 'status', ['ok' => 'ok', 'info' => 'info', 'warning' => 'warning', 'error' => 'error']),
                 D::field('value', 'Value'),
                 D::field('message', 'Message'),
             ], $this->queries->checks()),

@@ -27,6 +27,9 @@ class LogQueries
         return app(Sources::class)->of('log', LogsModule::signature($level, $message), $limit);
     }
 
+    /**
+     * An entry with the columns of `entries()`.
+     */
     public function entry(int $id): ?object
     {
         return $this->entriesTable()->where('id', $id)->first();

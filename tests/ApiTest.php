@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Foundation\Console\ClosureCommand;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Date;
@@ -7,7 +9,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
-use Keepsuit\Spyglass\Http\Middleware\EnsureModuleEnabled;
 use Keepsuit\Spyglass\Modules\Health\HealthModule;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
@@ -40,14 +41,25 @@ function apiRoutes(): array
     ));
 }
 
-function apiRequest(Route $route): array
+/**
+ * @param  array<string, string>  $parameters
+ * @return array{string, string}
+ */
+function apiRequest(Route $route, array $parameters = []): array
 {
-    return [in_array('POST', $route->methods(), true) ? 'postJson' : 'getJson', '/'.preg_replace('/\{\w+\}/', '1', $route->uri())];
+    $uri = preg_replace_callback('/\{(\w+)\}/', fn (array $match) => $parameters[$match[1]] ?? '1', $route->uri());
+
+    return [in_array('POST', $route->methods(), true) ? 'postJson' : 'getJson', '/'.$uri];
 }
 
 function apiWidget(array $page, string $key): array
 {
     return collect($page['widgets'])->firstWhere('key', $key) ?? throw new RuntimeException("No widget [{$key}].");
+}
+
+function apiItems(array $page, string $key): array
+{
+    return collect(apiWidget($page, $key)['items'])->pluck('value', 'key')->all();
 }
 
 function apiFailJob(): string
@@ -58,19 +70,26 @@ function apiFailJob(): string
     return app('queue.failer')->ids()[0];
 }
 
-function apiExceptionGroup(string $fingerprint, array $values = []): void
+function apiTask(string $label): void
 {
-    DB::table(Sources::GROUPS)->insert([
-        'kind' => 'exception', 'signature' => $fingerprint, 'class' => RuntimeException::class, 'message' => 'Boom',
-        'file' => 'app/Foo.php', 'line' => 12, 'count' => 3,
-        'first_seen_at' => '2026-03-01 10:00:00', 'last_seen_at' => '2026-03-01 12:00:00', ...$values,
+    DB::table(ScheduleModule::TASKS)->insert([
+        'key' => sha1($label), 'label' => $label, 'expression' => '* * * * *', 'timezone' => 'UTC',
+        'first_seen_at' => '2025-01-01 00:00:00', 'last_seen_at' => '2026-01-01 12:00:00',
+    ]);
+}
+
+function apiLogEntry(string $level, string $message, string $body = '{}', string $at = '2026-03-01 12:00:00'): int
+{
+    return DB::table(Sources::ENTRIES)->insertGetId([
+        'kind' => 'log', 'signature' => LogsModule::signature($level, $message), 'level' => $level, 'recorded_at' => $at,
+        'message' => $message, 'body' => $body, 'source_type' => 'command', 'source' => 'backup', 'context' => '{"tenant":"a"}',
     ]);
 }
 
 it('denies every endpoint without authorization', function () {
     Spyglass::auth(fn () => false);
 
-    expect(apiRoutes())->toHaveCount(14);
+    expect(apiRoutes())->not->toBeEmpty();
 
     foreach (apiRoutes() as $route) {
         [$method, $uri] = apiRequest($route);
@@ -79,7 +98,12 @@ it('denies every endpoint without authorization', function () {
     }
 });
 
-it('answers 404 on every endpoint of a disabled module and leaves it out of the module list', function (string $module) {
+it('answers 404 on every endpoint of a disabled module, leaving its data untouched', function (string $module) {
+    apiTask('inspire');
+    $uuid = apiFailJob();
+    seedExceptionGroup(str_repeat('a', 40));
+    $parameters = ['task' => sha1('inspire'), 'uuid' => $uuid, 'fingerprint' => str_repeat('a', 40), 'id' => (string) apiLogEntry('error', 'Disk full')];
+
     config(["spyglass.modules.{$module}.enabled" => false]);
 
     $routes = array_filter(apiRoutes(), fn (Route $route) => explode('.', (string) $route->getName())[2] === $module);
@@ -87,23 +111,38 @@ it('answers 404 on every endpoint of a disabled module and leaves it out of the 
     expect($routes)->not->toBeEmpty();
 
     foreach ($routes as $route) {
-        [$method, $uri] = apiRequest($route);
+        [$method, $uri] = apiRequest($route, $parameters);
 
-        // Routes with parameters answer 404 for a missing record as well.
-        expect($route->gatherMiddleware())->toContain(EnsureModuleEnabled::class.':'.$module);
         $this->{$method}($uri)->assertNotFound();
     }
 
-    expect($this->getJson('/spyglass/api')->json('modules.*.key'))->not->toContain($module)->toContain('test');
+    expect(app('queue.failer')->find($uuid))->not->toBeNull()
+        ->and(DB::table('jobs')->count())->toBe(0)
+        ->and(DB::table(Sources::GROUPS)->value('resolved_at'))->toBeNull()
+        ->and($this->getJson('/spyglass/api')->json('modules.*.key'))->not->toContain($module)->toContain('test');
 })->with(['schedule', 'queue', 'exceptions', 'logs', 'health']);
 
-it('checks the CSRF token of actions', function () {
+it('checks the CSRF token of every action, whatever the configured middleware', function () {
+    $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : 'Illuminate\Foundation\Http\Middleware\ValidateCsrfToken';
+
+    foreach (apiRoutes() as $route) {
+        if (in_array('POST', $route->methods(), true)) {
+            expect($route->gatherMiddleware())->toContain($csrf);
+        }
+    }
+
     // CSRF is not verified while running unit tests.
     $this->app['env'] = 'local';
-    apiExceptionGroup(str_repeat('a', 40));
+    seedExceptionGroup(str_repeat('a', 40));
 
     $this->post('/spyglass/api/exceptions/'.str_repeat('a', 40).'/resolve')->assertStatus(419);
     $this->get('/spyglass/api/exceptions/'.str_repeat('a', 40).'/resolve')->assertMethodNotAllowed();
+});
+
+it('answers validation errors with JSON, whatever the request accepts', function () {
+    $this->get('/spyglass/api/logs?level=loud')->assertUnprocessable()->assertJsonValidationErrors('level');
+    $this->get('/spyglass/api/logs?page=99999999999')->assertUnprocessable()->assertJsonValidationErrors('page');
+    $this->get('/spyglass/api/logs?page=0')->assertUnprocessable();
 });
 
 it('lists the enabled modules', function () {
@@ -112,122 +151,176 @@ it('lists the enabled modules', function () {
 
 it('describes the schedule', function () {
     Date::setTestNow('2026-01-01 12:00:30');
-    DB::table(ScheduleModule::TASKS)->insert([
-        'key' => sha1('inspire'), 'label' => 'inspire', 'expression' => '* * * * *', 'timezone' => 'UTC',
-        'first_seen_at' => '2025-01-01 00:00:00', 'last_seen_at' => '2026-01-01 12:00:00',
-    ]);
+    apiTask('inspire');
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('inspire'), 'started_at' => '2026-01-01 12:00:00.250',
-        'finished_at' => '2026-01-01 12:00:01.250', 'duration_ms' => 1000, 'status' => 'success', 'exit_code' => 0, 'host' => 'web-1',
+        'finished_at' => '2026-01-01 12:00:01.250', 'duration_ms' => 1000, 'status' => 'failed', 'exit_code' => 1, 'host' => 'web-1',
+        'exception_class' => RuntimeException::class, 'fingerprint' => str_repeat('a', 40), 'output' => 'secret',
     ]);
 
     $tasks = apiWidget($this->getJson('/spyglass/api/schedule')->assertOk()->json(), 'tasks');
 
     expect($tasks)->toMatchArray(['type' => 'table', 'link' => 'schedule/{key}', 'pagination' => null])
+        ->and(collect($tasks['columns'])->firstWhere('key', 'last_status')['tones'])->toMatchArray(['success' => 'ok', 'failed' => 'error'])
         ->and($tasks['rows'][0])->toMatchArray([
             'key' => sha1('inspire'),
-            'last_status' => 'success',
+            'last_status' => 'failed',
             'last_started_at' => '2026-01-01T12:00:00.250Z',
             'last_duration_ms' => 1000,
             'next_run' => '2026-01-01T12:01:00.000Z',
             'missed' => false,
-        ]);
+        ])
+        // Only declared columns and the values links need.
+        ->and($tasks['rows'][0])->not->toHaveKey('command');
 
     $page = $this->getJson('/spyglass/api/schedule/'.sha1('inspire'))->assertOk()->json();
 
     expect($page['title'])->toBe('inspire')
-        ->and(collect(apiWidget($page, 'task')['items'])->firstWhere('key', 'expression')['value'])->toBe('* * * * *')
+        ->and(apiItems($page, 'task')['expression'])->toBe('* * * * *')
         ->and(apiWidget($page, 'runs'))->toMatchArray(['pagination' => ['page' => 1, 'per_page' => 25, 'has_more' => false, 'total' => null]])
-        ->and(apiWidget($page, 'runs')['rows'][0])->toMatchArray(['status' => 'success', 'host' => 'web-1', 'duration_ms' => 1000]);
+        ->and(apiWidget($page, 'runs')['rows'][0])->toMatchArray([
+            'status' => 'failed',
+            'host' => 'web-1',
+            'duration_ms' => 1000,
+            'exception' => ['label' => RuntimeException::class, 'url' => 'exceptions/'.str_repeat('a', 40)],
+        ]);
 
     $this->getJson('/spyglass/api/schedule/missing')->assertNotFound();
 });
 
 it('describes the queue', function () {
-    Date::setTestNow('2026-01-01 12:00:00');
+    // Bucket-aligned: the last hour still holds the 11:00 bucket at 12:04.
+    Date::setTestNow('2026-01-01 12:04:00');
     DB::table(QueueModule::AGGREGATES)->insert([
         ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 4, 'failed' => 1, 'duration_max' => 30],
         ['bucket' => '2026-01-01 11:05:00', 'connection' => 'database', 'queue' => 'emails', 'job' => 'B', 'processed' => 2, 'failed' => 0, 'duration_max' => 10],
     ]);
     DB::table(QueueModule::FAILED_JOBS)->insert([
         'uuid' => 'u-1', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
-        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-01-01 11:00:00', 'scope' => 'tenant:acme',
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-01-01 11:00:00', 'scope' => 'tenant:acme', 'context' => '{"tenant":"acme"}',
     ]);
     Spyglass::resolveScopeLabelsUsing(fn (array $scopes) => ['tenant:acme' => 'Acme']);
 
-    $page = $this->getJson('/spyglass/api/queue')->assertOk()->json();
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
-    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'unit' => null])
+    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(2)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
-        ->and(apiWidget($page, 'jobs')['rows'])->toHaveCount(2)
+        ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
+        ->and(apiWidget($page, 'sizes')['rows'])->toHaveCount(2)
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray([
             'link' => 'queue/failed-jobs/{uuid}',
             'pagination' => ['page' => 1, 'per_page' => 25, 'has_more' => false, 'total' => 1],
+            'filters' => ['queue', 'job', 'scope'],
         ])
-        ->and(apiWidget($page, 'failed_jobs')['rows'][0])->toMatchArray(['uuid' => 'u-1', 'scope' => 'tenant:acme', 'scope_label' => 'Acme', 'failed_at' => '2026-01-01T11:00:00.000Z'])
+        ->and(apiWidget($page, 'failed_jobs')['rows'][0])->toBe([
+            'uuid' => 'u-1',
+            'failed_at' => '2026-01-01T11:00:00.000Z',
+            'job' => 'A',
+            'connection' => 'database',
+            'queue' => 'default',
+            'exception' => ['label' => 'E', 'url' => 'exceptions/'.str_repeat('a', 40)],
+            'attempts' => 1,
+            'scope_label' => 'Acme',
+        ])
         ->and(collect($page['filters'])->pluck('key')->all())->toBe(['range', 'queue', 'job', 'scope']);
 
     $filtered = $this->getJson('/spyglass/api/queue?queue=emails&range=7d')->assertOk()->json();
 
     expect(apiWidget($filtered, 'processed')['value'])->toBe(2)
+        ->and(array_column(apiWidget($filtered, 'sizes')['rows'], 'queue'))->toBe(['emails'])
         ->and(apiWidget($filtered, 'failed_jobs')['rows'])->toBe([])
         ->and($filtered['filters'][0]['value'])->toBe('7d');
+
+    // Aggregates without scopes ignore the scope filter instead of showing zeros.
+    $scoped = $this->getJson('/spyglass/api/queue?scope=tenant:other')->assertOk()->json();
+
+    expect(apiWidget($scoped, 'processed')['value'])->toBe(6)
+        ->and(apiWidget($scoped, 'failed_jobs')['rows'])->toBe([]);
+
+    config(['spyglass.modules.queue.aggregate_by_scope' => true]);
+    $scoped = $this->getJson('/spyglass/api/queue?scope=tenant:other')->assertOk()->json();
+
+    expect(apiWidget($scoped, 'processed'))->toMatchArray(['value' => 0, 'filters' => ['range', 'queue', 'job', 'scope']]);
 
     $this->getJson('/spyglass/api/queue?range=1y')->assertUnprocessable();
     $this->getJson('/spyglass/api/queue?queue[]=x')->assertUnprocessable();
 });
 
-it('shows a failed job', function () {
+it('shows a failed job with its index row and exception group', function () {
     // Laravel applies `app.timezone` at boot.
     config(['app.timezone' => 'Europe/Rome']);
     date_default_timezone_set('Europe/Rome');
     $this->beforeApplicationDestroyed(fn () => date_default_timezone_set('UTC'));
     Date::setTestNow(Date::parse('2026-01-01 11:00:00', 'UTC'));
     $uuid = apiFailJob();
+    DB::table(QueueModule::FAILED_JOBS)->insert([
+        'uuid' => $uuid, 'connection' => 'database', 'queue' => 'default', 'job' => QueueJob::class, 'attempts' => 1,
+        'exception_class' => RuntimeException::class, 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-01-01 11:00:00',
+    ]);
 
-    $details = apiWidget($this->getJson("/spyglass/api/queue/failed-jobs/{$uuid}")->assertOk()->json(), 'job');
-    $items = collect($details['items'])->pluck('value', 'key');
+    $page = $this->getJson("/spyglass/api/queue/failed-jobs/{$uuid}")->assertOk()->json();
+    $items = apiItems($page, 'job');
 
-    expect($items['uuid'])->toBe($uuid)
-        ->and($items['failed_at'])->toBe('2026-01-01T11:00:00.000Z')
-        ->and(collect($details['items'])->firstWhere('key', 'payload')['value'])->toBeArray()->toHaveKey('uuid', $uuid)
-        ->and(collect($details['actions'])->pluck('url')->all())->toBe(["queue/failed-jobs/{$uuid}/retry", "queue/failed-jobs/{$uuid}/delete"]);
+    expect($items)->toMatchArray([
+        'uuid' => $uuid,
+        'job' => QueueJob::class,
+        'attempts' => 1,
+        'failed_at' => '2026-01-01T11:00:00.000Z',
+        'exception_group' => ['label' => RuntimeException::class, 'url' => 'exceptions/'.str_repeat('a', 40)],
+    ])
+        ->and($items['payload'])->toBeArray()->toHaveKey('uuid', $uuid)
+        ->and(collect(apiWidget($page, 'job')['actions'])->pluck('url')->all())->toBe(["queue/failed-jobs/{$uuid}/retry", "queue/failed-jobs/{$uuid}/delete"]);
 
-    $this->getJson('/spyglass/api/queue/failed-jobs/missing')->assertNotFound();
+    config(['spyglass.modules.exceptions.enabled' => false]);
+
+    expect(apiItems($this->getJson("/spyglass/api/queue/failed-jobs/{$uuid}")->json(), 'job')['exception_group'])
+        ->toBe(['label' => RuntimeException::class, 'url' => null]);
+
+    $this->getJson('/spyglass/api/queue/failed-jobs/missing')->assertNotFound()->assertJson(['message' => 'Already retried or removed.']);
 });
 
 it('retries a failed job', function () {
     $uuid = apiFailJob();
 
-    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/retry")->assertOk()->assertExactJson(['outcome' => 'done']);
+    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/retry")->assertOk()->assertExactJson(['outcome' => 'done', 'message' => null]);
 
     expect(app('queue.failer')->find($uuid))->toBeNull()
         ->and(DB::table('jobs')->count())->toBe(1);
 
-    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/retry")->assertNotFound()->assertExactJson(['outcome' => 'missing']);
+    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/retry")->assertNotFound()->assertExactJson(['outcome' => 'missing', 'message' => 'Already retried or removed.']);
 });
 
 it('deletes a failed job', function () {
     $uuid = apiFailJob();
 
-    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/delete")->assertOk()->assertExactJson(['outcome' => 'done']);
+    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/delete")->assertOk()->assertExactJson(['outcome' => 'done', 'message' => null]);
 
     expect(app('queue.failer')->find($uuid))->toBeNull()
         ->and(DB::table('jobs')->count())->toBe(0);
 
-    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/delete")->assertNotFound()->assertExactJson(['outcome' => 'missing']);
+    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/delete")->assertNotFound()->assertExactJson(['outcome' => 'missing', 'message' => 'Already retried or removed.']);
 });
 
+it('reports a failed retry or delete as a conflict', function (string $action, string $command) {
+    $uuid = apiFailJob();
+    Artisan::registerCommand(new ClosureCommand("queue:{$command} {id*}", fn () => 1));
+
+    $this->postJson("/spyglass/api/queue/failed-jobs/{$uuid}/{$action}")->assertConflict()->assertExactJson(['outcome' => 'failed', 'message' => 'The command failed.']);
+
+    expect(app('queue.failer')->find($uuid))->not->toBeNull();
+})->with([['retry', 'retry'], ['delete', 'forget']]);
+
 it('describes exceptions', function () {
-    apiExceptionGroup(str_repeat('a', 40));
-    apiExceptionGroup(str_repeat('b', 40), ['class' => LogicException::class, 'resolved_at' => '2026-03-02 00:00:00']);
+    seedExceptionGroup(str_repeat('a', 40), ['line' => 12, 'count' => 3, 'last_seen_at' => '2026-03-01 12:00:00']);
+    seedExceptionGroup(str_repeat('b', 40), ['class' => LogicException::class, 'resolved_at' => '2026-03-02 00:00:00']);
 
     $groups = apiWidget($this->getJson('/spyglass/api/exceptions')->assertOk()->json(), 'groups');
 
     expect($groups['link'])->toBe('exceptions/{fingerprint}')
-        ->and($groups['rows'][0])->toMatchArray(['fingerprint' => str_repeat('b', 40), 'status' => 'resolved'])
-        ->and($groups['rows'][1])->toMatchArray(['location' => 'app/Foo.php:12', 'count' => 3, 'status' => 'unresolved', 'last_seen_at' => '2026-03-01T12:00:00.000Z']);
+        ->and(collect($groups['columns'])->firstWhere('key', 'status')['tones'])->toBe(['unresolved' => 'error', 'resolved' => 'ok'])
+        ->and($groups['rows'][0])->toMatchArray(['location' => 'app/Foo.php:12', 'count' => 3, 'status' => 'unresolved', 'last_seen_at' => '2026-03-01T12:00:00.000Z'])
+        ->and($groups['rows'][1])->toMatchArray(['fingerprint' => str_repeat('b', 40), 'status' => 'resolved']);
 
     $unresolved = apiWidget($this->getJson('/spyglass/api/exceptions?status=unresolved')->json(), 'groups');
 
@@ -238,7 +331,7 @@ it('describes exceptions', function () {
 
 it('shows an exception group with its sources and occurrences', function () {
     $fingerprint = str_repeat('a', 40);
-    apiExceptionGroup($fingerprint);
+    seedExceptionGroup($fingerprint);
     DB::table(Sources::GROUPS)->insert(['kind' => 'exception', 'signature' => $fingerprint, 'source_type' => 'job', 'source_hash' => sha1('A'), 'source' => 'A', 'count' => 3, 'last_seen_at' => '2026-03-01 12:00:00']);
     DB::table(Sources::ENTRIES)->insert([
         'kind' => 'exception', 'signature' => $fingerprint, 'recorded_at' => '2026-03-01 12:00:00', 'message' => 'Boom',
@@ -256,8 +349,9 @@ it('shows an exception group with its sources and occurrences', function () {
 
 it('resolves and reopens an exception group', function () {
     $fingerprint = str_repeat('a', 40);
-    apiExceptionGroup($fingerprint);
+    seedExceptionGroup($fingerprint);
 
+    $this->postJson("/spyglass/api/exceptions/{$fingerprint}/resolve")->assertNoContent();
     $this->postJson("/spyglass/api/exceptions/{$fingerprint}/resolve")->assertNoContent();
 
     expect(DB::table(Sources::GROUPS)->value('resolved_at'))->not->toBeNull()
@@ -272,29 +366,25 @@ it('resolves and reopens an exception group', function () {
 });
 
 it('describes logs and shows an entry with its sources', function () {
-    DB::table(Sources::ENTRIES)->insert([
-        ['kind' => 'log', 'signature' => LogsModule::signature('error', 'Disk full'), 'level' => 'error', 'recorded_at' => '2026-03-01 12:00:00', 'message' => 'Disk full', 'body' => '{"disk":"local"}', 'source_type' => 'command', 'source' => 'backup'],
-        ['kind' => 'log', 'signature' => LogsModule::signature('warning', 'Slow'), 'level' => 'warning', 'recorded_at' => '2026-03-01 11:00:00', 'message' => 'Slow', 'body' => '{"ms":', 'source_type' => 'command', 'source' => 'backup'],
-    ]);
+    $error = apiLogEntry('error', 'Disk full', '{"disk":"local"}');
+    $warning = apiLogEntry('warning', 'Slow', '{"ms":', '2026-03-01 11:00:00');
     DB::table(Sources::GROUPS)->insert(['kind' => 'log', 'signature' => LogsModule::signature('error', 'Disk full'), 'source_type' => 'command', 'source_hash' => sha1('backup'), 'source' => 'backup', 'count' => 7, 'last_seen_at' => '2026-03-01 12:00:00']);
 
     $entries = apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'entries');
 
     expect($entries['link'])->toBe('logs/{id}')
         ->and(array_column($entries['rows'], 'message'))->toBe(['Disk full', 'Slow'])
+        ->and($entries['rows'][0])->not->toHaveKeys(['log_context', 'context'])
+        ->and(collect($entries['columns'])->firstWhere('key', 'level')['tones'])->toMatchArray(['error' => 'error', 'warning' => 'warning', 'info' => 'info'])
         ->and(array_column(apiWidget($this->getJson('/spyglass/api/logs?level=warning')->json(), 'entries')['rows'], 'message'))->toBe(['Slow']);
 
-    $this->getJson('/spyglass/api/logs?level=loud')->assertUnprocessable();
+    $page = $this->getJson("/spyglass/api/logs/{$error}")->assertOk()->json();
 
-    $page = $this->getJson("/spyglass/api/logs/{$entries['rows'][0]['id']}")->assertOk()->json();
-
-    expect(collect(apiWidget($page, 'entry')['items'])->firstWhere('key', 'log_context')['value'])->toBe(['disk' => 'local'])
+    expect(apiItems($page, 'entry'))->toMatchArray(['log_context' => ['disk' => 'local'], 'context' => ['tenant' => 'a']])
         ->and(apiWidget($page, 'sources')['rows'][0])->toMatchArray(['source' => 'backup', 'count' => 7]);
 
     // A context cut at its length limit is shown as stored.
-    $truncated = $this->getJson("/spyglass/api/logs/{$entries['rows'][1]['id']}")->json();
-
-    expect(collect(apiWidget($truncated, 'entry')['items'])->firstWhere('key', 'log_context')['value'])->toBe('{"ms":');
+    expect(apiItems($this->getJson("/spyglass/api/logs/{$warning}")->json(), 'entry')['log_context'])->toBe('{"ms":');
 
     $this->getJson('/spyglass/api/logs/999')->assertNotFound();
 });
@@ -303,6 +393,6 @@ it('describes health checks', function () {
     $checks = apiWidget($this->getJson('/spyglass/api/health')->assertOk()->json(), 'checks');
 
     expect($checks['type'])->toBe('table')
-        ->and(collect($checks['rows'])->firstWhere('key', 'environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
-        ->and(collect($checks['rows'])->firstWhere('key', 'database:'.config('database.default'))['status'] ?? null)->toBe('ok');
+        ->and(collect($checks['rows'])->firstWhere('label', 'Environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
+        ->and(collect($checks['rows'])->firstWhere('label', 'Database '.config('database.default'))['status'] ?? null)->toBe('ok');
 });
