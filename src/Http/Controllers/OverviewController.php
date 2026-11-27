@@ -75,7 +75,7 @@ class OverviewController extends Controller
                     Widget::field('exception_class', 'Exception'),
                     Widget::field('failed_at', 'Failed at', 'datetime'),
                 ], $this->rows($failed->items()), link: 'queue/failed-jobs/{uuid}', empty: 'No failed jobs.'),
-            ], more: 'queue', width: 'half');
+            ], more: 'queue');
         }
 
         if (isset($modules['schedule'])) {
@@ -91,10 +91,12 @@ class OverviewController extends Controller
                     Widget::field('label', 'Task'),
                     Widget::field('last_status', 'Last run', 'status', ScheduleController::TONES),
                     Widget::field('recent', 'Recent runs', 'runs', ScheduleController::TONES),
-                    Widget::field('missed', 'Missed', 'boolean'),
+                    Widget::field('last_started_at', 'Last started at', 'datetime'),
+                    Widget::field('last_duration_ms', 'Duration', 'duration'),
                     Widget::field('next_run', 'Next run', 'datetime'),
+                    Widget::field('missed', 'Missed', 'boolean'),
                 ], $tasks->sortBy(fn (array $task) => $task['attention'] ? 0 : 1)->take(self::TASKS)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
-            ], more: 'schedule', width: 'half');
+            ], more: 'schedule');
         }
 
         if (isset($modules['logs'])) {
@@ -112,7 +114,7 @@ class OverviewController extends Controller
             ], more: 'logs', width: 'half');
         }
 
-        // Charts with a time axis first, side by side.
+        // Queue and schedule take a full row each, exceptions and logs share the one between.
         $order = array_flip(['queue', 'exceptions', 'logs', 'schedule']);
         uksort($groups, fn (string $a, string $b) => $order[$a] <=> $order[$b]);
 
