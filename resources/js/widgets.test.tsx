@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
-import type { DetailsWidget, Field, SeriesWidget, TableWidget } from './lib';
-import { Details, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
+import { Details, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -149,5 +149,54 @@ describe('Actions', () => {
         await waitFor(() => expect(notices).toEqual([{ tone: 'error', text: message }]));
         expect(calls).toEqual(['/api/queue/failed-jobs/a%2Fb/retry']);
         expect(screen.queryByText(message)).toBeNull();
+    });
+});
+
+describe('Metrics', () => {
+    it('links a metric to its page and flags its tone', () => {
+        render(
+            <Metrics
+                metrics={[
+                    { type: 'metric', key: 'failed', label: 'Failed jobs', value: 9, filters: [], link: 'queue', tone: 'error' },
+                    { type: 'metric', key: 'processed', label: 'Processed', value: 1200, filters: [] },
+                ]}
+                ignored={() => []}
+            />,
+        );
+
+        expect(screen.getByRole('link', { name: /Failed jobs/ }).getAttribute('href')).toBe('/queue');
+        expect(screen.getByText('9').className).toContain('text-error');
+        expect(screen.queryByRole('link', { name: /Processed/ })).toBeNull();
+    });
+});
+
+describe('Table options', () => {
+    it('links to the full list and explains its own emptiness', () => {
+        wrap(<Table widget={{ ...table, rows: [], pagination: null, more: 'queue', empty: 'No failed jobs.' }} ignored={[]} filtered={false} page={null} />);
+
+        expect(screen.getByRole('link', { name: 'View all' }).getAttribute('href')).toBe('/queue');
+        expect(screen.getByText('No failed jobs.')).toBeTruthy();
+    });
+});
+
+describe('Datetimes', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('shows the relative time with the exact one beside it', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T12:05:00.000Z'));
+
+        render(<Value field={field('datetime')} value="2026-01-01T12:00:00.000Z" compact />);
+
+        const time = document.querySelector('time')!;
+        expect(time.getAttribute('dateTime')).toBe('2026-01-01T12:00:00.000Z');
+        expect(time.textContent).toContain(new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-5, 'minute'));
+        expect(time.textContent).toContain(formatShort('2026-01-01T12:00:00.000Z'));
+    });
+
+    it('reads future times too', () => {
+        expect(formatRelative('2026-01-01T14:00:00.000Z', Date.parse('2026-01-01T12:00:00.000Z'))).toBe(
+            new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(2, 'hour'),
+        );
     });
 });

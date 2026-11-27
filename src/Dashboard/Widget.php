@@ -35,15 +35,20 @@ final class Widget
     }
 
     /**
+     * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value.
+     *
      * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function metric(string $key, string $label, int|float|string|null $value, array $filters = []): array
+    public static function metric(string $key, string $label, int|float|string|null $value, array $filters = [], ?string $link = null, ?string $tone = null): array
     {
-        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'filters' => $filters];
+        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'filters' => $filters, ...array_filter(['link' => $link, 'tone' => $tone], fn ($option) => $option !== null)];
     }
 
     /**
+     * `$more` leads to the full list of a shortened table, `$empty` replaces the generic text of an empty one,
+     * and `$width` `half` lets two tables share a row.
+     *
      * @param  list<Field>  $columns
      * @param  iterable<array<string, mixed>>  $rows
      * @param  Paginator<int, mixed>|null  $paginator
@@ -60,6 +65,9 @@ final class Widget
         ?string $link = null,
         array $actions = [],
         array $filters = [],
+        ?string $more = null,
+        ?string $empty = null,
+        ?string $width = null,
     ): array {
         // Row values the templates need, shown or not.
         preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
@@ -79,6 +87,7 @@ final class Widget
             'link' => $link,
             'actions' => $actions,
             'filters' => $filters,
+            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width], fn ($option) => $option !== null),
         ];
     }
 

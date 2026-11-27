@@ -50,6 +50,16 @@ class QueueQueries
     }
 
     /**
+     * The start of the bucket holding the moment `$hours` ago, so a range never leaves out its oldest bucket.
+     */
+    public function rangeStart(int $hours): CarbonInterface
+    {
+        $start = now()->subHours($hours)->getTimestamp();
+
+        return now()->setTimestamp($start - $start % 300);
+    }
+
+    /**
      * Counters over the whole range, busiest first.
      *
      * @param  list<'queue'|'job'>  $groupBy

@@ -12,7 +12,7 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class LogsController extends Controller
 {
-    protected const array TONES = [
+    public const array TONES = [
         'emergency' => 'error', 'alert' => 'error', 'critical' => 'error', 'error' => 'error',
         'warning' => 'warning', 'notice' => 'info', 'info' => 'info', 'debug' => 'info',
     ];

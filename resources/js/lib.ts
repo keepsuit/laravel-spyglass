@@ -14,7 +14,7 @@ export type Action = { key: string; label: string; url: string };
 export type Filter = { key: string; label: string; value: string | null; options: { value: string; label: string }[] | null };
 export type Row = Record<string, unknown>;
 
-export type MetricWidget = { type: 'metric'; key: string; label: string; value: number | string | null; filters: string[] };
+export type MetricWidget = { type: 'metric'; key: string; label: string; value: number | string | null; filters: string[]; link?: string; tone?: Tone };
 export type TableWidget = {
     type: 'table';
     key: string;
@@ -25,6 +25,9 @@ export type TableWidget = {
     link: string | null;
     actions: Action[];
     filters: string[];
+    more?: string;
+    empty?: string;
+    width?: 'half';
 };
 export type SeriesWidget = {
     type: 'series';
@@ -129,6 +132,32 @@ export function formatNumber(value: unknown): string {
 export function formatDate(value: string): string {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : dateFormat.format(date);
+}
+
+const shortFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+export function formatShort(value: string | number): string {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : shortFormat.format(date);
+}
+
+const relativeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ['year', 31_536_000],
+    ['month', 2_592_000],
+    ['day', 86_400],
+    ['hour', 3_600],
+    ['minute', 60],
+    ['second', 1],
+];
+
+/** "5 minutes ago", "in 2 hours": past and future alike, as next runs are in the future. */
+export function formatRelative(value: string, now = Date.now()): string {
+    const seconds = (new Date(value).getTime() - now) / 1000;
+    if (Number.isNaN(seconds)) return value;
+
+    const [unit, size] = units.find(([, size]) => Math.abs(seconds) >= size) ?? units.at(-1)!;
+    return relativeFormat.format(Math.round(seconds / size), unit);
 }
 
 export function formatDuration(ms: number): string {

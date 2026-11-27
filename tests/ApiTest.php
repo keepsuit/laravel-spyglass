@@ -2,6 +2,7 @@
 
 use Illuminate\Foundation\Console\ClosureCommand;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Date;
@@ -145,8 +146,67 @@ it('answers validation errors with JSON, whatever the request accepts', function
     $this->get('/spyglass/api/logs?page=0')->assertUnprocessable();
 });
 
-it('lists the enabled modules', function () {
-    expect($this->getJson('/spyglass/api')->assertOk()->json('modules'))->toContain(['key' => 'queue', 'label' => 'Queue']);
+it('lists the enabled modules after the overview', function () {
+    $modules = $this->getJson('/spyglass/api')->assertOk()->json('modules');
+
+    expect($modules[0])->toBe(['key' => 'overview', 'label' => 'Overview'])
+        ->and($modules)->toContain(['key' => 'queue', 'label' => 'Queue']);
+});
+
+it('describes the overview of the enabled modules', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
+    apiTask('inspire');
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('inspire'), 'started_at' => '2026-03-01 12:00:00', 'status' => 'failed', 'host' => 'web-1',
+    ]);
+    // The queue module joins after boot, without its listeners: the index row is written here.
+    DB::table(QueueModule::FAILED_JOBS)->insert([
+        'uuid' => $uuid = 'u-1', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-03-01 12:00:00',
+    ]);
+    seedExceptionGroup(str_repeat('a', 40), ['last_seen_at' => '2026-03-01 12:00:00']);
+    seedExceptionGroup(str_repeat('b', 40), ['resolved_at' => '2026-03-02 00:00:00']);
+    apiLogEntry('error', 'Disk full', at: '2026-03-01 12:00:00');
+    apiLogEntry('error', 'Old', at: '2026-02-20 12:00:00');
+
+    $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
+    $metrics = collect($page['widgets'])->where('type', 'metric')->keyBy('key');
+
+    expect($page['title'])->toBe('Overview')
+        ->and($metrics['unresolved_exceptions'])->toMatchArray(['value' => 1, 'tone' => 'error', 'link' => 'exceptions?status=unresolved'])
+        ->and($metrics['failed_jobs_total'])->toMatchArray(['value' => 1, 'tone' => 'error', 'link' => 'queue'])
+        ->and($metrics['tasks_attention'])->toMatchArray(['value' => 1, 'tone' => 'warning'])
+        ->and($metrics['log_entries']['value'])->toBe(1)
+        ->and(apiWidget($page, 'exceptions')['rows'][0]['fingerprint'])->toBe(str_repeat('a', 40))
+        ->and(apiWidget($page, 'failed_jobs'))->toMatchArray(['link' => 'queue/failed-jobs/{uuid}', 'more' => 'queue', 'width' => 'half'])
+        ->and(apiWidget($page, 'failed_jobs')['rows'][0]['uuid'])->toBe($uuid)
+        ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
+        ->and(array_column(apiWidget($page, 'logs')['rows'], 'message'))->toBe(['Disk full'])
+        ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
+
+    // Every link and "more" leads to a page of the API.
+    foreach (collect($page['widgets'])->flatMap(fn (array $widget) => array_filter([$widget['link'] ?? null, $widget['more'] ?? null])) as $link) {
+        $path = preg_replace('/\{(\w+)\}/', '1', $link);
+        expect(collect(apiRoutes())->contains(fn (Route $route) => $route->matches(Request::create('/spyglass/api/'.strtok($path, '?')), false)))->toBeTrue();
+    }
+});
+
+it('leaves disabled modules out of the overview, without querying them', function () {
+    config(['spyglass.modules.queue.enabled' => false, 'spyglass.modules.exceptions.enabled' => false]);
+    Spyglass::connection()->enableQueryLog();
+
+    $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
+
+    expect(array_column($page['widgets'], 'key'))->not->toContain('failed_jobs', 'throughput', 'exceptions', 'unresolved_exceptions')->toContain('tasks', 'logs')
+        ->and(collect(Spyglass::connection()->getQueryLog())->pluck('query')->implode(' '))->not->toContain('spyglass_queue', 'spyglass_groups');
+});
+
+it('shows an empty overview when every module is disabled', function () {
+    foreach (['schedule', 'queue', 'exceptions', 'logs', 'health'] as $module) {
+        config(["spyglass.modules.{$module}.enabled" => false]);
+    }
+
+    expect($this->getJson('/spyglass/api/overview')->assertOk()->json('widgets'))->toBe([]);
 });
 
 it('describes the schedule', function () {

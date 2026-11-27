@@ -69,3 +69,109 @@ body {
     outline: 2px solid var(--brass);
     outline-offset: 2px;
 }
+
+:root {
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+        transform 120ms var(--ease),
+        background-color 120ms var(--ease),
+        border-color 120ms var(--ease);
+}
+
+.btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
+    transition-duration: 90ms;
+}
+
+.btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.lift {
+    transition:
+        transform 120ms var(--ease),
+        border-color 120ms var(--ease),
+        box-shadow 120ms var(--ease);
+}
+
+/* Underline drawn left to right on hover. */
+.link {
+    background: linear-gradient(currentColor, currentColor) 0 100% / 0 1px no-repeat;
+    transition: background-size 120ms var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        background: color-mix(in oklab, var(--surface), var(--ink) 6%);
+        border-color: color-mix(in oklab, var(--line), var(--ink) 25%);
+        transition-duration: 150ms;
+    }
+
+    .lift:hover {
+        transform: translateY(-2px);
+        border-color: color-mix(in oklab, var(--line), var(--ink) 25%);
+        box-shadow: 0 8px 24px -12px color-mix(in oklab, var(--ink) 10%, transparent);
+        transition-duration: 180ms;
+    }
+
+    .link:hover {
+        background-size: 100% 1px;
+        transition-duration: 150ms;
+    }
+}
+
+.btn:focus-visible,
+.lift:focus-visible {
+    border-color: var(--brass);
+}
+
+/* Touch targets of at least 44px. */
+@media (pointer: coarse) {
+    .btn {
+        height: 2.75rem;
+    }
+}
+
+/* Once, when the dashboard loads: never on a refresh or a change of page. */
+@keyframes enter {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+#spyglass > div {
+    animation: enter 420ms var(--ease-enter) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* In a table with many columns, long text keeps a readable width and the table scrolls instead. */
+table[data-wide] .long {
+    min-width: 12rem;
+}

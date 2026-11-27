@@ -13,7 +13,7 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class ExceptionsController extends Controller
 {
-    protected const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
+    public const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
 
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {
@@ -44,7 +44,7 @@ class ExceptionsController extends Controller
                 Widget::field('count', 'Count', 'number'),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime'),
                 Widget::field('status', 'Status', 'status', self::TONES),
-            ], array_map($this->group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
+            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
         ], [
             Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
             Widget::filter('class', 'Class', $filters['class'] ?? null),
@@ -62,7 +62,7 @@ class ExceptionsController extends Controller
 
         abort_if($group === null, 404);
 
-        $group = $this->group((array) $group);
+        $group = self::group((array) $group);
         $occurrences = $this->queries->occurrences($fingerprint, page: $page);
 
         return Widget::page($group['class'], [
@@ -122,7 +122,7 @@ class ExceptionsController extends Controller
      * @param  array<string, mixed>  $group
      * @return array<string, mixed>
      */
-    protected function group(array $group): array
+    public static function group(array $group): array
     {
         return [
             ...$group,

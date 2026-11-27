@@ -16,7 +16,7 @@ class QueueController extends Controller
 {
     protected const array RANGES = ['1h' => 1, '24h' => 24, '7d' => 168];
 
-    protected const array COUNTERS = ['processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out', 'queued' => 'Queued'];
+    public const array COUNTERS = ['processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out', 'queued' => 'Queued'];
 
     protected const string MISSING = 'Already retried or removed.';
 
@@ -35,9 +35,7 @@ class QueueController extends Controller
         $page = $this->page($request);
 
         $to = now();
-        // From the start of the bucket holding the range start, so the oldest bucket is not left out.
-        $start = now()->subHours(self::RANGES[$range])->getTimestamp();
-        $from = now()->setTimestamp($start - $start % 300);
+        $from = $this->queries->rangeStart(self::RANGES[$range]);
 
         // Aggregates are kept per scope only when configured: otherwise they ignore the scope filter.
         $aggregateFilters = ['range', 'queue', 'job', ...(config('spyglass.modules.queue.aggregate_by_scope') ? ['scope'] : [])];

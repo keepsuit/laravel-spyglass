@@ -12,7 +12,7 @@ use Keepsuit\Spyglass\Spyglass;
  */
 class ScheduleController extends Controller
 {
-    protected const array TONES = ['success' => 'ok', 'running' => 'info', 'interrupted' => 'warning', 'failed' => 'error'];
+    public const array TONES = ['success' => 'ok', 'running' => 'info', 'interrupted' => 'warning', 'failed' => 'error'];
 
     public function __construct(Spyglass $spyglass, protected ScheduleQueries $queries)
     {
@@ -34,7 +34,7 @@ class ScheduleController extends Controller
                 Widget::field('next_run', 'Next run', 'datetime'),
                 Widget::field('missed', 'Missed', 'boolean'),
                 Widget::field('stale', 'Removed', 'boolean'),
-            ], $this->queries->tasks()->map($this->flatten(...)), link: 'schedule/{key}'),
+            ], $this->queries->tasks()->map(self::flatten(...)), link: 'schedule/{key}'),
         ]);
     }
 
@@ -68,7 +68,7 @@ class ScheduleController extends Controller
                 Widget::field('last_skip_reason', 'Last skip reason'),
                 Widget::field('first_seen_at', 'First seen at', 'datetime'),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime'),
-            ], $this->flatten($details)),
+            ], self::flatten($details)),
             Widget::table('runs', 'Runs', [
                 Widget::field('started_at', 'Started at', 'datetime'),
                 Widget::field('status', 'Status', 'status', self::TONES),
@@ -90,7 +90,7 @@ class ScheduleController extends Controller
      * @param  array<string, mixed>  $task
      * @return array<string, mixed>
      */
-    protected function flatten(array $task): array
+    public static function flatten(array $task): array
     {
         $run = $task['last_run'] ?? [];
         unset($task['last_run']);

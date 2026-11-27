@@ -23,6 +23,7 @@ use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 use Keepsuit\Spyglass\Http\Controllers\ExceptionsController;
 use Keepsuit\Spyglass\Http\Controllers\HealthController;
 use Keepsuit\Spyglass\Http\Controllers\LogsController;
+use Keepsuit\Spyglass\Http\Controllers\OverviewController;
 use Keepsuit\Spyglass\Http\Controllers\QueueController;
 use Keepsuit\Spyglass\Http\Controllers\ScheduleController;
 use Keepsuit\Spyglass\Http\Middleware\AcceptJson;
@@ -167,10 +168,13 @@ class SpyglassServiceProvider extends PackageServiceProvider
                 $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : 'Illuminate\Foundation\Http\Middleware\ValidateCsrfToken';
 
                 Route::prefix('api')->middleware(AcceptJson::class)->name('api.')->group(function () use ($csrf) {
-                    Route::get('/', fn (Spyglass $spyglass) => ['modules' => array_map(
-                        fn (string $module) => ['key' => $module, 'label' => Str::headline($module)],
-                        array_keys($spyglass->modules()),
-                    )])->name('modules');
+                    // The overview leads the list: the dashboard opens on its first entry.
+                    Route::get('/', fn (Spyglass $spyglass) => ['modules' => [
+                        ['key' => 'overview', 'label' => 'Overview'],
+                        ...array_map(fn (string $module) => ['key' => $module, 'label' => Str::headline($module)], array_keys($spyglass->modules())),
+                    ]])->name('modules');
+
+                    Route::get('overview', [OverviewController::class, 'index'])->name('overview');
 
                     Route::middleware(EnsureModuleEnabled::class.':schedule')->group(function () {
                         Route::get('schedule', [ScheduleController::class, 'index'])->name('schedule');
