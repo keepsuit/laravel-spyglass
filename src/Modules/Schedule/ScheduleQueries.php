@@ -26,7 +26,6 @@ class ScheduleQueries
 
     protected const int MAX_TASKS = 1000;
 
-    /** Runs in a task's recent outcomes: retention always keeps the newest ten. */
     protected const int RECENT_RUNS = 10;
 
     /** A task the scheduler stopped publishing this long before the newest publish was removed from the schedule. */
@@ -56,7 +55,9 @@ class ScheduleQueries
             ->limit(self::MAX_TASKS)
             ->get();
 
-        $lastRuns = $this->lastRuns($tasks->pluck('key')->all(), self::RECENT_RUNS);
+        // No more than the retention keeps of each outcome, or pruned successes would leave only failures.
+        $recent = min(self::RECENT_RUNS, ...array_map(fn (string $kept) => max(2, (int) config("spyglass.modules.schedule.retention.{$kept}", self::RECENT_RUNS)), ['successful_runs_per_task', 'failed_runs_per_task']));
+        $lastRuns = $this->lastRuns($tasks->pluck('key')->all(), $recent);
         $newest = is_string($tasks->first()?->newest) ? $this->date($tasks->first()->newest) : Date::now();
 
         return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key] ?? [], $newest));

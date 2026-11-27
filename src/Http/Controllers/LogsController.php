@@ -34,7 +34,7 @@ class LogsController extends Controller
         $range = $filters['range'] ?? '24h';
         $from = Hourly::start(self::HOURS[$range]);
         $by = array_filter(['level' => $filters['level'] ?? null, 'scope' => $filters['scope'] ?? null], fn ($value) => $value !== null);
-        $entries = $this->queries->entries([...$by, 'from' => $from], page: $this->page($request));
+        $entries = $this->queries->entries($by, page: $this->page($request));
 
         return Widget::page('Logs', [
             self::chart($this->queries->hourly($from, $by)),
@@ -45,7 +45,7 @@ class LogsController extends Controller
                 Widget::field('source_type', 'Source type'),
                 Widget::field('source', 'Source'),
                 Widget::field('scope_label', 'Scope'),
-            ], $this->rows($entries->items()), $entries, link: 'logs/{id}', filters: ['range', 'level', 'scope']),
+            ], $this->rows($entries->items()), $entries, link: 'logs/{id}', filters: ['level', 'scope']),
         ], [
             $this->rangeFilter($range),
             Widget::filter('level', 'Level', $filters['level'] ?? null, array_map(ucfirst(...), array_combine(array_keys(self::TONES), array_keys(self::TONES)))),

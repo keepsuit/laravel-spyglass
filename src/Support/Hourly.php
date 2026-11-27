@@ -64,7 +64,8 @@ final class Hourly
 
         $points = [];
 
-        for ($hour = $from->copy(); $hour->lte(now()); $hour->addHour()) {
+        // Reassigned: the application may use immutable dates.
+        for ($hour = $from; $hour->lte(now()); $hour = $hour->addHour()) {
             $key = $hour->format('Y-m-d H:00:00');
             $points[] = ['bucket' => $key, ...($counts[$key] ?? [])];
         }

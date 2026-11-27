@@ -1,5 +1,6 @@
 <?php
 
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Console\ClosureCommand;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
@@ -534,4 +535,17 @@ it('counts recorded exceptions and log entries per hour, with every hour present
         ->and($total('&scope=tenant:a'))->toBe(1)
         ->and($total('&class='.RuntimeException::class))->toBe(2)
         ->and($total('&class=Missing'))->toBe(0);
+});
+
+it('counts entries per hour when the application uses immutable dates', function () {
+    Date::use(CarbonImmutable::class);
+
+    try {
+        Date::setTestNow('2026-03-01 12:30:00');
+        apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
+
+        expect(apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded')['points'])->toHaveCount(24);
+    } finally {
+        Date::useDefault();
+    }
 });
