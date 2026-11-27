@@ -34,10 +34,14 @@ class DatabaseSeeder extends Seeder
             ['cache:prune-stale-tags', '0 * * * *', 'success', 812],
             ['routes/console.php:14', '*/5 * * * *', 'running', null],
             ['sitemap:generate', '30 3 * * *', 'interrupted', null],
+            ['horizon:snapshot', '*/5 * * * *', 'success', 140],
+            ['telescope:prune', '0 3 * * *', 'success', 2_300],
+            ['orders:sync-shipping', '*/15 * * * *', 'success', 9_800],
+            ['invoices:remind-overdue', '0 9 * * 1-5', 'success', 1_250],
         ];
 
         // Every how many runs each task fails: never, often, now and then.
-        $failEvery = [0, 7, 2, 4, 5];
+        $failEvery = [0, 7, 2, 4, 5, 0, 0, 6, 0];
 
         foreach ($tasks as $t => [$label, $expression, $status, $duration]) {
             DB::table('spyglass_schedule_tasks')->insert([
@@ -51,7 +55,11 @@ class DatabaseSeeder extends Seeder
             ]);
 
             for ($i = 0; $i < 12; $i++) {
-                $started = $this->now->copy()->subHours($i * 6 + 1);
+                // Every six hours, or on each slot for the frequent new tasks, so they are not missed.
+                $every = $t > 4 && preg_match('#^\*/(\d+) #', $expression, $match) ? (int) $match[1] * 60 : 0;
+                $started = $every > 0
+                    ? $this->now->copy()->setTimestamp(intdiv($this->now->getTimestamp(), $every) * $every - $i * $every + 2)
+                    : $this->now->copy()->subHours($i * 6 + 1);
                 $runStatus = $i === 0 ? $status : ($failEvery[$t] && $i % $failEvery[$t] === 1 ? 'failed' : 'success');
                 $open = in_array($runStatus, ['running', 'interrupted'], true);
 

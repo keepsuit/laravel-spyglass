@@ -285,6 +285,8 @@ function Actions({ actions, row = {} }: { actions: Action[]; row?: Row }) {
 
 export function Table({ widget, ignored, filtered, page }: { widget: TableWidget; ignored: string[]; filtered: boolean; page: number | null }) {
     const box = useBox();
+    // Half a row is narrow: closer columns, the same outer edges.
+    const cellX = useContext(Nested) ? 'px-3 first:pl-4 last:pr-4' : 'px-4';
     const { pagination, link } = widget;
     const current = page ?? pagination?.page ?? 1;
     const pages = pagination?.total != null ? Math.max(1, Math.ceil(pagination.total / pagination.per_page)) : null;
@@ -311,7 +313,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                         <thead className="border-y border-line text-xs text-muted">
                             <tr>
                                 {widget.columns.map((column) => (
-                                    <th key={column.key} scope="col" className={`px-4 py-2 font-medium whitespace-nowrap ${alignRight(column) ? 'text-right' : ''}`}>
+                                    <th key={column.key} scope="col" className={`${cellX} py-2 font-medium whitespace-nowrap ${alignRight(column) ? 'text-right' : ''}`}>
                                         {column.label}
                                     </th>
                                 ))}
@@ -330,7 +332,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                                     className={`align-top transition-colors duration-150 ${link ? 'cursor-pointer hover:bg-bg/70' : ''}`}
                                 >
                                     {widget.columns.map((column, columnIndex) => (
-                                        <td key={column.key} className={`px-4 py-2.5 ${alignRight(column) ? 'text-right' : ''}`}>
+                                        <td key={column.key} className={`${cellX} py-2.5 ${alignRight(column) ? 'text-right' : ''}`}>
                                             {link && columnIndex === 0 && column.type !== 'link' ? (
                                                 <Link to={fill(link, row)} className="font-medium">
                                                     <Value field={column} value={row[column.key]} compact />

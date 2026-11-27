@@ -92,6 +92,7 @@ class OverviewController extends Controller
                     Widget::field('last_status', 'Last run', 'status', ScheduleController::TONES),
                     Widget::field('recent', 'Recent runs', 'runs', ScheduleController::TONES),
                     Widget::field('missed', 'Missed', 'boolean'),
+                    Widget::field('next_run', 'Next run', 'datetime'),
                 ], $tasks->sortBy(fn (array $task) => $task['attention'] ? 0 : 1)->take(self::TASKS)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
             ], more: 'schedule', width: 'half');
         }
