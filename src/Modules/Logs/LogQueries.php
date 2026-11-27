@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Buckets;
 use Keepsuit\Spyglass\Support\Sources;
 use stdClass;
 
@@ -51,6 +52,36 @@ class LogQueries
             ->orderByDesc('recorded_at')
             ->orderByDesc('id')
             ->simplePaginate(max(1, min($perPage, 100)), page: $page);
+    }
+
+    /**
+     * Recorded entries per hour and level since `$from`, as `Buckets::entries()`. Throttled: at most one a
+     * minute per message, scope and source.
+     *
+     * @param  array{level?: string, scope?: string}  $filters
+     * @return list<array<string, mixed>>
+     */
+    public function hourly(CarbonInterface $from, array $filters = []): array
+    {
+        return Buckets::entries('log', $from, fn (Builder $query) => $query->where(array_intersect_key($filters, array_flip(['level', 'scope']))), by: 'level');
+    }
+
+    /**
+     * Scopes of the entries, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function scopes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(LogsModule::ENTRIES)
+            ->where('kind', 'log')
+            ->whereNotNull('scope')
+            ->distinct()
+            ->orderBy('scope')
+            ->limit(max(1, min($limit, 100)))
+            ->pluck('scope')
+            ->map(fn ($scope) => (string) $scope)
+            ->all());
     }
 
     protected function entriesTable(): Builder

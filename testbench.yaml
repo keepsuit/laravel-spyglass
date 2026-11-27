@@ -1,0 +1,25 @@
+providers:
+  - Keepsuit\Spyglass\SpyglassServiceProvider
+  - Workbench\App\Providers\WorkbenchServiceProvider
+
+migrations:
+  - database/migrations
+
+workbench:
+  start: '/spyglass'
+  install: true
+  health: false
+  discovers:
+    web: false
+    api: false
+    commands: false
+    components: false
+    views: false
+  # The database file is created by `composer build` first: Spyglass pins its connection at boot.
+  build:
+    - db-wipe
+    - migrate-fresh:
+        --seed: true
+        --seeder: Workbench\Database\Seeders\DatabaseSeeder
+  assets: []
+  sync: []

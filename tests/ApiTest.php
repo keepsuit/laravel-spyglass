@@ -1,8 +1,11 @@
 <?php
 
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Console\ClosureCommand;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -54,7 +57,17 @@ function apiRequest(Route $route, array $parameters = []): array
 
 function apiWidget(array $page, string $key): array
 {
-    return collect($page['widgets'])->firstWhere('key', $key) ?? throw new RuntimeException("No widget [{$key}].");
+    return apiWidgets($page)->firstWhere('key', $key) ?? throw new RuntimeException("No widget [{$key}].");
+}
+
+/**
+ * Every widget of a page, those of groups included.
+ *
+ * @return Collection<int, array<string, mixed>>
+ */
+function apiWidgets(array $page): Collection
+{
+    return collect($page['widgets'])->flatMap(fn (array $widget) => [$widget, ...($widget['widgets'] ?? [])]);
 }
 
 function apiItems(array $page, string $key): array
@@ -145,8 +158,84 @@ it('answers validation errors with JSON, whatever the request accepts', function
     $this->get('/spyglass/api/logs?page=0')->assertUnprocessable();
 });
 
-it('lists the enabled modules', function () {
-    expect($this->getJson('/spyglass/api')->assertOk()->json('modules'))->toContain(['key' => 'queue', 'label' => 'Queue']);
+it('lists the enabled modules after the overview', function () {
+    $modules = $this->getJson('/spyglass/api')->assertOk()->json('modules');
+
+    expect($modules[0])->toBe(['key' => 'overview', 'label' => 'Overview'])
+        ->and($modules)->toContain(['key' => 'queue', 'label' => 'Queue']);
+});
+
+it('describes the overview of the enabled modules', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
+    apiTask('inspire');
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('inspire'), 'started_at' => '2026-03-01 12:00:00', 'status' => 'failed', 'host' => 'web-1',
+    ]);
+    apiTask('archive');
+    DB::table(ScheduleModule::TASKS)->where('label', 'archive')->update(['expression' => '0 0 1 1 *']);
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('archive'), 'started_at' => '2026-01-01 00:00:00', 'status' => 'success', 'host' => 'web-1',
+    ]);
+    apiTask('zeta');
+    DB::table(ScheduleModule::TASKS)->where('label', 'zeta')->update(['expression' => '20 12 * * *']);
+    DB::table(ScheduleModule::RUNS)->insert([
+        'id' => (string) Str::ulid(), 'task' => sha1('zeta'), 'started_at' => '2026-03-01 12:20:00', 'status' => 'success', 'host' => 'web-1',
+    ]);
+    // The queue module joins after boot, without its listeners: the index row is written here.
+    DB::table(QueueModule::FAILED_JOBS)->insert([
+        'uuid' => $uuid = 'u-1', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'attempts' => 1,
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-03-01 12:00:00',
+    ]);
+    seedExceptionGroup(str_repeat('a', 40), ['last_seen_at' => '2026-03-01 12:00:00']);
+    seedExceptionGroup(str_repeat('b', 40), ['resolved_at' => '2026-03-02 00:00:00']);
+    apiLogEntry('error', 'Disk full', at: '2026-03-01 12:00:00');
+    apiLogEntry('error', 'Old', at: '2026-02-20 12:00:00');
+
+    $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
+    $metrics = collect($page['widgets'])->where('type', 'metric')->keyBy('key');
+
+    expect($page['title'])->toBe('Overview')
+        ->and($metrics['unresolved_exceptions'])->toMatchArray(['value' => 1, 'tone' => 'error', 'link' => 'exceptions?status=unresolved'])
+        ->and($metrics['failed_jobs_total'])->toMatchArray(['value' => 1, 'tone' => 'error', 'link' => 'queue'])
+        ->and($metrics['tasks_attention'])->toMatchArray(['value' => 1, 'tone' => 'warning'])
+        ->and($metrics['log_entries']['value'])->toBe(1)
+        ->and(collect($page['widgets'])->where('type', 'group')->pluck('key')->all())->toBe(['queue', 'exceptions', 'logs', 'schedule'])
+        ->and(apiWidget($page, 'queue'))->toMatchArray(['more' => 'queue'])->not->toHaveKey('width')
+        ->and(apiWidget($page, 'logs'))->toMatchArray(['width' => 'half'])
+        ->and(array_column(apiWidget($page, 'queue')['widgets'], 'key'))->toBe(['throughput', 'failed_jobs'])
+        ->and(apiWidget($page, 'unresolved')['rows'][0]['fingerprint'])->toBe(str_repeat('a', 40))
+        ->and(apiWidget($page, 'failed_jobs'))->toMatchArray(['link' => 'queue/failed-jobs/{uuid}'])
+        ->and(apiWidget($page, 'failed_jobs')['rows'][0]['uuid'])->toBe($uuid)
+        ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
+        ->and(array_column(apiWidget($page, 'latest_logs')['rows'], 'message'))->toBe(['Disk full'])
+        ->and(apiWidget($page, 'logs')['widgets'][0])->toMatchArray(['key' => 'recorded', 'style' => 'bars'])
+        // Those needing attention first, then by their latest run.
+        ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'zeta', 'archive'])
+        ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
+
+    // Every link and "more" leads to a page of the API.
+    foreach (apiWidgets($page)->flatMap(fn (array $widget) => array_filter([$widget['link'] ?? null, $widget['more'] ?? null])) as $link) {
+        $path = preg_replace('/\{(\w+)\}/', '1', $link);
+        expect(collect(apiRoutes())->contains(fn (Route $route) => $route->matches(Request::create('/spyglass/api/'.strtok($path, '?')), false)))->toBeTrue();
+    }
+});
+
+it('leaves disabled modules out of the overview, without querying them', function () {
+    config(['spyglass.modules.queue.enabled' => false, 'spyglass.modules.exceptions.enabled' => false]);
+    Spyglass::connection()->enableQueryLog();
+
+    $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
+
+    expect(apiWidgets($page)->pluck('key')->all())->not->toContain('queue', 'failed_jobs', 'throughput', 'exceptions', 'unresolved', 'unresolved_exceptions')->toContain('schedule', 'tasks', 'logs')
+        ->and(collect(Spyglass::connection()->getQueryLog())->pluck('query')->implode(' '))->not->toContain('spyglass_queue', 'spyglass_groups');
+});
+
+it('shows an empty overview when every module is disabled', function () {
+    foreach (['schedule', 'queue', 'exceptions', 'logs', 'health'] as $module) {
+        config(["spyglass.modules.{$module}.enabled" => false]);
+    }
+
+    expect($this->getJson('/spyglass/api/overview')->assertOk()->json('widgets'))->toBe([]);
 });
 
 it('describes the schedule', function () {
@@ -170,6 +259,7 @@ it('describes the schedule', function () {
             'next_run' => '2026-01-01T12:01:00.000Z',
             'missed' => false,
         ])
+        ->and($tasks['rows'][0]['recent'][array_key_last($tasks['rows'][0]['recent'])])->toBe(['status' => 'failed', 'started_at' => '2026-01-01T12:00:00.250Z'])
         // Only declared columns and the values links need.
         ->and($tasks['rows'][0])->not->toHaveKey('command');
 
@@ -204,8 +294,11 @@ it('describes the queue', function () {
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
     expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
-        ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(2)
+        // Every 5-minute bucket from 11:00 to 12:00, empty ones as zero.
+        ->and(apiWidget($page, 'throughput'))->toMatchArray(['step' => 300])
+        ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(13)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
+        ->and(apiWidget($page, 'throughput')['points'][12])->toMatchArray(['bucket' => '2026-01-01T12:00:00.000Z', 'processed' => 0])
         ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
         ->and(apiWidget($page, 'sizes')['rows'])->toHaveCount(2)
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray([
@@ -366,6 +459,7 @@ it('resolves and reopens an exception group', function () {
 });
 
 it('describes logs and shows an entry with its sources', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
     $error = apiLogEntry('error', 'Disk full', '{"disk":"local"}');
     $warning = apiLogEntry('warning', 'Slow', '{"ms":', '2026-03-01 11:00:00');
     DB::table(Sources::GROUPS)->insert(['kind' => 'log', 'signature' => LogsModule::signature('error', 'Disk full'), 'source_type' => 'command', 'source_hash' => sha1('backup'), 'source' => 'backup', 'count' => 7, 'last_seen_at' => '2026-03-01 12:00:00']);
@@ -389,10 +483,123 @@ it('describes logs and shows an entry with its sources', function () {
     $this->getJson('/spyglass/api/logs/999')->assertNotFound();
 });
 
-it('describes health checks', function () {
-    $checks = apiWidget($this->getJson('/spyglass/api/health')->assertOk()->json(), 'checks');
+it('describes health checks, with the unit of each measure', function () {
+    $checks = collect(apiWidget($this->getJson('/spyglass/api/health')->assertOk()->json(), 'checks')['rows']);
 
-    expect($checks['type'])->toBe('table')
-        ->and(collect($checks['rows'])->firstWhere('label', 'Environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
-        ->and(collect($checks['rows'])->firstWhere('label', 'Database '.config('database.default'))['status'] ?? null)->toBe('ok');
+    $value = fn (string $prefix) => $checks->first(fn (array $check) => str_starts_with($check['label'], $prefix))['value'] ?? null;
+
+    expect($checks->firstWhere('label', 'Environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
+        ->and($checks->firstWhere('label', 'Database '.config('database.default'))['status'] ?? null)->toBe('ok')
+        ->and($value('Database '))->toMatch('/^\d+(\.\d)? ms$/')
+        ->and($value('Cache '))->toMatch('/^\d+(\.\d)? ms$/')
+        ->and($value('Queue '))->toBe('0 pending');
+});
+
+it('suggests known values for the free text filters', function () {
+    Spyglass::resolveScopeLabelsUsing(fn (array $scopes) => array_combine($scopes, array_map(strtoupper(...), $scopes)));
+    Date::setTestNow('2026-01-01 12:04:00');
+    DB::table(QueueModule::AGGREGATES)->insert(['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'emails', 'job' => 'A', 'processed' => 1]);
+    DB::table(QueueModule::FAILED_JOBS)->insert([
+        'uuid' => 'u-1', 'connection' => 'database', 'queue' => 'emails', 'job' => 'A', 'attempts' => 1,
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-01-01 11:00:00', 'scope' => 'tenant:acme',
+    ]);
+    seedExceptionGroup(str_repeat('a', 40), scopes: ['tenant:acme']);
+    apiLogEntry('error', 'Disk full');
+
+    $suggestions = fn (string $uri) => collect($this->getJson($uri)->assertOk()->json('filters'))->pluck('suggestions', 'key')->all();
+
+    expect($suggestions('/spyglass/api/queue'))->toMatchArray([
+        'range' => null,
+        'queue' => [['value' => 'emails', 'label' => 'emails']],
+        'job' => [['value' => 'A', 'label' => 'A']],
+        'scope' => [['value' => 'tenant:acme', 'label' => 'TENANT:ACME']],
+    ])
+        ->and($suggestions('/spyglass/api/exceptions'))->toMatchArray([
+            'class' => [['value' => RuntimeException::class, 'label' => RuntimeException::class]],
+            'scope' => [['value' => 'tenant:acme', 'label' => 'TENANT:ACME']],
+        ])
+        ->and($suggestions('/spyglass/api/logs'))->toMatchArray(['scope' => []]);
+});
+
+it('counts recorded exceptions and log entries per hour, with every hour present', function () {
+    Date::setTestNow('2026-03-01 12:30:00');
+    apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
+    apiLogEntry('critical', 'Disk gone', at: '2026-03-01 12:20:00');
+    apiLogEntry('warning', 'Slow', at: '2026-03-01 10:59:59');
+    apiLogEntry('warning', 'Too old', at: '2026-02-27 12:00:00');
+
+    $chart = apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded');
+
+    expect($chart)->toMatchArray(['style' => 'bars', 'filters' => ['range', 'level', 'scope']])
+        ->and($chart['step'])->toBe(3600)
+        // From the hour holding the moment a day ago, so the range never cuts its oldest bucket.
+        ->and($chart['points'])->toHaveCount(25)
+        ->and($chart['points'][0]['bucket'])->toBe('2026-02-28T12:00:00.000Z')
+        ->and($chart['points'][23])->toBe(['bucket' => '2026-03-01T11:00:00.000Z', 'error' => 0, 'warning' => 0, 'info' => 0])
+        ->and($chart['points'][22])->toMatchArray(['warning' => 1])
+        ->and($chart['points'][24])->toMatchArray(['error' => 2, 'warning' => 0]);
+
+    $fingerprint = str_repeat('a', 40);
+    seedExceptionGroup($fingerprint, scopes: ['tenant:a', 'tenant:b']);
+    $total = fn (string $query) => array_sum(array_column(apiWidget($this->getJson("/spyglass/api/exceptions?range=7d{$query}")->assertOk()->json(), 'recorded')['points'], 'count'));
+
+    expect(apiWidget($this->getJson('/spyglass/api/exceptions?range=7d')->json(), 'recorded')['points'])->toHaveCount(169)
+        ->and($total(''))->toBe(2)
+        ->and($total('&scope=tenant:a'))->toBe(1)
+        ->and($total('&class='.RuntimeException::class))->toBe(2)
+        ->and($total('&class=Missing'))->toBe(0);
+});
+
+it('counts entries per hour when the application uses immutable dates', function () {
+    Date::use(CarbonImmutable::class);
+
+    try {
+        Date::setTestNow('2026-03-01 12:30:00');
+        apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
+
+        expect(apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded')['points'])->toHaveCount(25);
+    } finally {
+        Date::useDefault();
+    }
+});
+
+it('shows the average duration per attempt and the max duration of the queue', function () {
+    Date::setTestNow('2026-01-01 12:04:00');
+    DB::table(QueueModule::AGGREGATES)->insert([
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'queued' => 9, 'processed' => 3, 'failed' => 1, 'duration_sum' => 400, 'duration_max' => 250],
+    ]);
+
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
+
+    // Queued jobs have no duration: 400 ms over 4 attempts.
+    expect(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 100, 'format' => 'duration'])
+        ->and(apiWidget($page, 'duration_max')['value'])->toBe(250)
+        ->and(apiWidget($this->getJson('/spyglass/api/queue?range=1h&job=Missing')->json(), 'duration_avg')['value'])->toBeNull();
+});
+
+it('sums the queue over 7 days into regular 30-minute buckets that add up to the cards', function () {
+    Date::setTestNow('2026-01-08 12:04:00');
+    // The application timezone does not move buckets: they are UTC.
+    config(['app.timezone' => 'Europe/Rome']);
+    date_default_timezone_set('Europe/Rome');
+
+    try {
+        DB::table(QueueModule::AGGREGATES)->insert([
+            ['bucket' => '2026-01-01 12:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 1],
+            ['bucket' => '2026-01-05 09:25:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 2],
+            ['bucket' => '2026-01-05 09:05:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'B', 'processed' => 3],
+            ['bucket' => '2026-01-08 12:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 4],
+        ]);
+
+        $page = $this->getJson('/spyglass/api/queue?range=7d')->assertOk()->json();
+        $points = collect(apiWidget($page, 'throughput')['points']);
+        $times = $points->map(fn (array $point) => strtotime($point['bucket']));
+
+        expect(apiWidget($page, 'throughput')['step'])->toBe(1800)
+            ->and($times->sliding(2)->every(fn ($pair) => $pair->last() - $pair->first() === 1800))->toBeTrue()
+            ->and($points->firstWhere('bucket', '2026-01-05T09:00:00.000Z')['processed'])->toBe(5)
+            ->and($points->sum('processed'))->toBe(apiWidget($page, 'processed')['value']);
+    } finally {
+        date_default_timezone_set('UTC');
+    }
 });

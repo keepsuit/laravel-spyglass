@@ -19,9 +19,11 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Commands\PruneCommand;
+use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 use Keepsuit\Spyglass\Http\Controllers\ExceptionsController;
 use Keepsuit\Spyglass\Http\Controllers\HealthController;
 use Keepsuit\Spyglass\Http\Controllers\LogsController;
+use Keepsuit\Spyglass\Http\Controllers\OverviewController;
 use Keepsuit\Spyglass\Http\Controllers\QueueController;
 use Keepsuit\Spyglass\Http\Controllers\ScheduleController;
 use Keepsuit\Spyglass\Http\Middleware\AcceptJson;
@@ -70,6 +72,9 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
     public function packageBooted(): void
     {
+        // Not through `hasViews()`, which would also offer the view for publishing: the page is internal.
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'spyglass');
+
         // Resolving here pins the connection and cache store names before anything
         // (e.g. tenancy) can switch the application defaults at runtime.
         $spyglass = $this->app->make(Spyglass::class);
@@ -159,16 +164,20 @@ class SpyglassServiceProvider extends PackageServiceProvider
             ->middleware([...config('spyglass.middleware', []), Authorize::class])
             ->name('spyglass.')
             ->group(function () {
-                Route::get('/', fn () => response()->noContent())->name('index');
+                Route::get('/', [DashboardController::class, 'index'])->name('index');
+                Route::get('assets/{file}', [DashboardController::class, 'asset'])->name('asset');
 
                 // The class the `web` group uses, so the check runs once: Laravel 13 renamed it.
                 $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : 'Illuminate\Foundation\Http\Middleware\ValidateCsrfToken';
 
                 Route::prefix('api')->middleware(AcceptJson::class)->name('api.')->group(function () use ($csrf) {
-                    Route::get('/', fn (Spyglass $spyglass) => ['modules' => array_map(
-                        fn (string $module) => ['key' => $module, 'label' => Str::headline($module)],
-                        array_keys($spyglass->modules()),
-                    )])->name('modules');
+                    // The overview leads the list: the dashboard opens on its first entry.
+                    Route::get('/', fn (Spyglass $spyglass) => ['modules' => [
+                        ['key' => 'overview', 'label' => 'Overview'],
+                        ...array_map(fn (string $module) => ['key' => $module, 'label' => Str::headline($module)], array_keys($spyglass->modules())),
+                    ]])->name('modules');
+
+                    Route::get('overview', [OverviewController::class, 'index'])->name('overview');
 
                     Route::middleware(EnsureModuleEnabled::class.':schedule')->group(function () {
                         Route::get('schedule', [ScheduleController::class, 'index'])->name('schedule');
@@ -205,6 +214,9 @@ class SpyglassServiceProvider extends PackageServiceProvider
                         Route::get('health', [HealthController::class, 'index'])->name('health');
                     });
                 });
+
+                // Client-side routes. Unknown API paths stay JSON 404s.
+                Route::get('{view}', [DashboardController::class, 'index'])->where('view', '(?!api(/|$)|assets/).*')->name('view');
             });
     }
 }

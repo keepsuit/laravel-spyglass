@@ -8,10 +8,25 @@ use Keepsuit\Spyglass\Spyglass;
 
 /**
  * @internal
+ *
+ * @phpstan-import-type Filter from Widget
  */
 abstract class Controller
 {
+    /** Ranges of the charts of hourly entries, in hours. */
+    protected const array HOURS = ['24h' => 24, '7d' => 168];
+
+    protected const int HOUR = 3600;
+
     public function __construct(protected Spyglass $spyglass) {}
+
+    /**
+     * @return Filter
+     */
+    protected function rangeFilter(string $range): array
+    {
+        return Widget::filter('range', 'Range', $range, ['24h' => 'Last 24 hours', '7d' => 'Last 7 days']);
+    }
 
     /**
      * The non-empty filters of the request, as strings. `'0'` is a valid value.
@@ -55,6 +70,23 @@ abstract class Controller
         }
 
         return $rows;
+    }
+
+    /**
+     * Known values offered by a free text filter, scopes with their label.
+     *
+     * @param  iterable<string>  $values
+     * @return array<string, string>
+     */
+    protected function suggestions(iterable $values, bool $scopes = false): array
+    {
+        $values = array_values(array_unique([...$values]));
+
+        if ($values === []) {
+            return [];
+        }
+
+        return $scopes ? $this->spyglass->scopeLabels($values) : array_combine($values, $values);
     }
 
     /**

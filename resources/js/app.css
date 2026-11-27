@@ -1,0 +1,315 @@
+@import 'tailwindcss';
+
+:root {
+    color-scheme: light;
+    /* Keepsuit brand: orange accent, cool greys. The darker orange is for text on light grounds. */
+    --bg: #f5f6f7;
+    --surface: #ffffff;
+    --line: #e3e5e8;
+    --ink: #17181a;
+    --muted: #55595e;
+    --accent: #ff4b00;
+    --accent-ink: #cc4308;
+    --ok: #2e7d5b;
+    --info: #2f6a9a;
+    --warning: #9a6210;
+    --error: #b2363a;
+    --series-1: #257de0;
+    --series-2: #f47230;
+    --series-3: #00b894;
+    --series-4: #f2a600;
+    --series-5: #ee7fac;
+    --series-6: #008a17;
+    --series-7: #6a4ce2;
+    --series-8: #ec4647;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+        --bg: #17181a;
+        --surface: #1f2933;
+        --line: #363c42;
+        --ink: #f5f6f7;
+        --muted: #8d9094;
+        --accent: #ff4b00;
+        --accent-ink: #ff6a2b;
+        --ok: #5fc495;
+        --info: #74b0e0;
+        --warning: #e6b04f;
+        --error: #f08a8c;
+        --series-1: #338ced;
+        --series-2: #e76624;
+        --series-3: #00a888;
+        --series-4: #d28e05;
+        --series-5: #e24d8b;
+        --series-6: #0aac23;
+        --series-7: #9887ef;
+        --series-8: #eb6263;
+    }
+}
+
+@theme inline {
+    --color-bg: var(--bg);
+    --color-surface: var(--surface);
+    --color-line: var(--line);
+    --color-ink: var(--ink);
+    --color-muted: var(--muted);
+    --color-accent: var(--accent);
+    --color-accent-ink: var(--accent-ink);
+    --color-ok: var(--ok);
+    --color-info: var(--info);
+    --color-warning: var(--warning);
+    --color-error: var(--error);
+}
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+:root {
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+        transform 120ms var(--ease),
+        background-color 120ms var(--ease),
+        border-color 120ms var(--ease);
+}
+
+/* A square button holding only an icon. */
+.btn-icon {
+    width: 2rem;
+    padding: 0;
+}
+
+.btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
+    transition-duration: 90ms;
+}
+
+.btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.lift {
+    transition:
+        transform 120ms var(--ease),
+        border-color 120ms var(--ease),
+        box-shadow 120ms var(--ease);
+}
+
+/* Underline drawn left to right on hover. */
+.link {
+    background: linear-gradient(currentColor, currentColor) 0 100% / 0 1px no-repeat;
+    transition: background-size 120ms var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        background: color-mix(in oklab, var(--surface), var(--ink) 6%);
+        border-color: color-mix(in oklab, var(--line), var(--ink) 25%);
+        transition-duration: 150ms;
+    }
+
+    .lift:hover {
+        transform: translateY(-2px);
+        border-color: color-mix(in oklab, var(--line), var(--ink) 25%);
+        box-shadow: 0 8px 24px -12px color-mix(in oklab, var(--ink) 10%, transparent);
+        transition-duration: 180ms;
+    }
+
+    .link:hover {
+        background-size: 100% 1px;
+        transition-duration: 150ms;
+    }
+}
+
+.btn:focus-visible,
+.lift:focus-visible {
+    border-color: var(--accent);
+}
+
+/* Touch targets of at least 44px. */
+@media (pointer: coarse) {
+    .btn {
+        height: 2.75rem;
+    }
+
+    .btn-icon {
+        width: 2.75rem;
+    }
+}
+
+/* Once, when the dashboard loads: never on a refresh or a change of page. */
+@keyframes enter {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+#spyglass > div {
+    animation: enter 420ms var(--ease-enter) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* In a table with many columns, long text keeps a readable width and the table scrolls instead. */
+table[data-wide] .long {
+    min-width: 12rem;
+}
+
+/* Chart tooltips take the look of the dashboard's popups; the chart library reads these variables. */
+.chart {
+    --ts-chart-tooltip-background: var(--surface);
+    --ts-chart-tooltip-color: var(--ink);
+    --ts-chart-tooltip-border: 1px solid var(--line);
+    --ts-chart-tooltip-border-radius: 0.5rem;
+    --ts-chart-tooltip-padding: 0.5rem 0.75rem;
+    --ts-chart-tooltip-shadow: 0 10px 15px -3px color-mix(in oklab, var(--ink) 6%, transparent);
+    --ts-chart-tooltip-font: 400 0.75rem/1.6 system-ui, sans-serif;
+}
+
+/*
+ * On a phone a table row reads as a list of label and value: the columns would not fit across. By viewport, not
+ * container: the half-width cards of a desktop are as narrow as a phone and keep their columns.
+ */
+@media (width < 40rem) {
+    .rows :is(table, tbody, tr, td) {
+        display: block;
+    }
+
+    .rows thead {
+        display: none;
+    }
+
+    .rows tr {
+        padding: 0.75rem 1rem;
+    }
+
+    .rows td {
+        display: flex;
+        gap: 0.75rem;
+        padding: 0.125rem 0;
+        text-align: start;
+    }
+
+    .rows td:first-child {
+        padding-bottom: 0.375rem;
+    }
+
+    .rows td[data-label]::before {
+        content: attr(data-label);
+        flex: none;
+        width: 7rem;
+        color: var(--muted);
+    }
+
+    .rows td[data-empty] {
+        display: none;
+    }
+
+    .rows td > * {
+        min-width: 0;
+    }
+
+    .rows table .long {
+        min-width: 0;
+    }
+
+    /* The relative time and the exact one on a line, as there is room across. */
+    .rows time {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        column-gap: 0.5rem;
+        white-space: normal;
+    }
+}
+
+/* A row that scrolls fades out at each edge with more beyond it. */
+@property --fade-start {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+
+@property --fade-end {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+
+.scroller {
+    --fade-size: 2.5rem;
+    scrollbar-width: none;
+    scroll-padding-inline: var(--fade-size);
+    mask:
+        linear-gradient(black, black) no-clip subtract,
+        linear-gradient(to right, black, transparent) 0 0 / var(--fade-start) 100% no-repeat no-clip,
+        linear-gradient(to right, transparent, black) 100% 0 / var(--fade-end) 100% no-repeat no-clip;
+    animation:
+        reveal-fade-start linear both,
+        hide-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range:
+        0 var(--fade-size),
+        calc(100% - var(--fade-size)) 100%;
+}
+
+@keyframes reveal-fade-start {
+    to {
+        --fade-start: var(--fade-size);
+    }
+}
+
+@keyframes hide-fade-end {
+    from {
+        --fade-end: var(--fade-size);
+    }
+}
+
+/* Without scroll-driven animations: shadows under covers that scroll with the row, on its solid ground. */
+@supports not (animation-timeline: scroll()) {
+    @media (width < 48rem) {
+        .scroller {
+            background:
+                linear-gradient(to right, var(--surface) 30%, transparent) left / 2.5rem 100% no-repeat local,
+                linear-gradient(to left, var(--surface) 30%, transparent) right / 2.5rem 100% no-repeat local,
+                radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--ink) 15%, transparent), transparent) left / 0.75rem 100% no-repeat,
+                radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--ink) 15%, transparent), transparent) right / 0.75rem 100% no-repeat,
+                var(--surface);
+        }
+    }
+}

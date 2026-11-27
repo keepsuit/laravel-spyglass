@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Date;
  *
  * @phpstan-type Field array{key: string, label: string, type: string, tones?: array<string, string>}
  * @phpstan-type Action array{key: string, label: string, url: string}
- * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>}
+ * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>, suggestions?: list<array{value: string, label: string}>}
  */
 final class Widget
 {
@@ -35,15 +35,35 @@ final class Widget
     }
 
     /**
+     * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value. `$format`
+     * `duration` reads the value as milliseconds.
+     *
      * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function metric(string $key, string $label, int|float|string|null $value, array $filters = []): array
-    {
-        return ['type' => 'metric', 'key' => $key, 'label' => $label, 'value' => $value, 'filters' => $filters];
+    public static function metric(
+        string $key,
+        string $label,
+        int|float|string|null $value,
+        array $filters = [],
+        ?string $link = null,
+        ?string $tone = null,
+        ?string $format = null,
+    ): array {
+        return [
+            'type' => 'metric',
+            'key' => $key,
+            'label' => $label,
+            'value' => $value,
+            'filters' => $filters,
+            ...array_filter(compact('link', 'tone', 'format'), fn ($option) => $option !== null),
+        ];
     }
 
     /**
+     * `$more` leads to the full list of a shortened table, `$empty` replaces the generic text of an empty one,
+     * and `$width` `half` lets two tables share a row.
+     *
      * @param  list<Field>  $columns
      * @param  iterable<array<string, mixed>>  $rows
      * @param  Paginator<int, mixed>|null  $paginator
@@ -60,6 +80,9 @@ final class Widget
         ?string $link = null,
         array $actions = [],
         array $filters = [],
+        ?string $more = null,
+        ?string $empty = null,
+        ?string $width = null,
     ): array {
         // Row values the templates need, shown or not.
         preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
@@ -79,26 +102,61 @@ final class Widget
             'link' => $link,
             'actions' => $actions,
             'filters' => $filters,
+            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width], fn ($option) => $option !== null),
         ];
     }
 
     /**
-     * Points share the `$x` key, a datetime, and a key per line.
+     * Points share the `$x` key, a datetime, and a key per line. A line can take the colour of a tone. `$style`
+     * `bars` stacks the lines as bars, one per point. `$note` says how to read the values. With `$step`, in
+     * seconds, points are counts in buckets of that size, every bucket present: the dashboard sums neighbours
+     * into larger buckets to fit its width.
      *
-     * @param  list<array{key: string, label: string}>  $lines
+     * @param  list<array{key: string, label: string, tone?: string}>  $lines
      * @param  iterable<array<string, mixed>>  $points
      * @param  list<string>  $filters
      * @return array<string, mixed>
      */
-    public static function series(string $key, string $label, string $x, array $lines, iterable $points, array $filters = []): array
-    {
+    public static function series(
+        string $key,
+        string $label,
+        string $x,
+        array $lines,
+        iterable $points,
+        array $filters = [],
+        ?string $style = null,
+        ?string $note = null,
+        ?string $width = null,
+        ?int $step = null,
+    ): array {
         $columns = [self::field($x, $x, 'datetime')];
 
         foreach ($lines as $line) {
             $columns[] = self::field($line['key'], $line['label'], 'number');
         }
 
-        return ['type' => 'series', 'key' => $key, 'label' => $label, 'x' => $x, 'lines' => $lines, 'points' => self::rows($columns, $points), 'filters' => $filters];
+        return [
+            'type' => 'series',
+            'key' => $key,
+            'label' => $label,
+            'x' => $x,
+            'lines' => $lines,
+            'points' => self::rows($columns, $points),
+            'filters' => $filters,
+            ...array_filter(compact('style', 'note', 'width', 'step'), fn ($option) => $option !== null),
+        ];
+    }
+
+    /**
+     * Tables, series and details about one subject, drawn as a single card. `$more` leads to its page and
+     * `$width` `half` lets two groups share a row.
+     *
+     * @param  list<array<string, mixed>>  $widgets
+     * @return array<string, mixed>
+     */
+    public static function group(string $key, string $label, array $widgets, ?string $more = null, ?string $width = null): array
+    {
+        return ['type' => 'group', 'key' => $key, 'label' => $label, 'widgets' => $widgets, 'filters' => [], ...array_filter(compact('more', 'width'), fn ($option) => $option !== null)];
     }
 
     /**
@@ -122,8 +180,8 @@ final class Widget
     }
 
     /**
-     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json or link
-     * (`{label, url}`, url null when not linkable). A status maps its values to the tones ok, info, warning and error; others are neutral.
+     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json, link
+     * (`{label, url}`, url null when not linkable) or runs (a list of `{status, started_at}`, oldest first). A status maps its values to the tones ok, info, warning and error; others are neutral.
      *
      * @param  array<string, string>|null  $tones
      * @return Field
@@ -140,16 +198,22 @@ final class Widget
     }
 
     /**
+     * Free text filters can suggest known values while still accepting any other.
+     *
      * @param  array<string, string>|null  $options  value => label; null for free text
+     * @param  array<string, string>|null  $suggestions  value => label, for free text
      * @return Filter
      */
-    public static function filter(string $key, string $label, ?string $value, ?array $options = null): array
+    public static function filter(string $key, string $label, ?string $value, ?array $options = null, ?array $suggestions = null): array
     {
+        $list = fn (array $items) => array_map(fn ($value, $label) => ['value' => (string) $value, 'label' => $label], array_keys($items), $items);
+
         return [
             'key' => $key,
             'label' => $label,
             'value' => $value,
-            'options' => $options === null ? null : array_map(fn ($value, $label) => ['value' => (string) $value, 'label' => $label], array_keys($options), $options),
+            'options' => $options === null ? null : $list($options),
+            ...($suggestions === null ? [] : ['suggestions' => $list($suggestions)]),
         ];
     }
 
@@ -208,6 +272,7 @@ final class Widget
             $type === 'number' && is_numeric($value) => $value + 0,
             $type === 'duration' && is_numeric($value) => (int) $value,
             $type === 'boolean' => (bool) $value,
+            $type === 'runs' && is_array($value) => array_map(fn (array $run) => ['status' => $run['status'], 'started_at' => self::value($run['started_at'], 'datetime')], $value),
             default => $value,
         };
     }

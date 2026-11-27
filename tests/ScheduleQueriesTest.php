@@ -304,7 +304,7 @@ it('loads the tasks and their last runs in two bounded queries', function () {
 
     expect($queries)->toHaveCount(2)
         ->and($queries[0])->toContain('limit')
-        ->and(substr_count($queries[1], 'limit 2'))->toBe(3)
+        ->and(substr_count($queries[1], 'limit 10'))->toBe(3)
         ->and($tasks->pluck('last_run.status', 'label')->all())->toBe(['a' => 'success', 'b' => 'success', 'c' => 'success']);
 });
 
@@ -338,4 +338,21 @@ it('reports an expression it cannot parse instead of failing', function () {
         ->and($this->spyglassErrors)->not->toBeEmpty();
 
     $this->spyglassErrors = [];
+});
+
+it('lists the outcomes of the latest runs, oldest first, and none for sub-minute tasks', function () {
+    insertTask('report', attributes: ['without_overlapping' => true]);
+    foreach (range(0, 11) as $hour) {
+        insertRun('report', sprintf('2026-01-01 %02d:00:00', $hour), $hour === 9 ? 'failed' : 'success');
+    }
+    // Superseded by the run after it, so interrupted.
+    DB::table(ScheduleModule::RUNS)->where('started_at', '2026-01-01 10:00:00')->update(['status' => 'running']);
+
+    insertTask('pulse', attributes: ['repeat_seconds' => 10]);
+    insertRun('pulse', '2026-01-01 12:00:00', 'failed');
+
+    expect(scheduledTask('report')['recent'])->toHaveCount(10)
+        ->and(array_column(scheduledTask('report')['recent'], 'status'))->toBe([...array_fill(0, 7, 'success'), 'failed', 'interrupted', 'success'])
+        ->and(scheduledTask('report')['recent'][0]['started_at'])->toStartWith('2026-01-01 02:00:00')
+        ->and(scheduledTask('pulse')['recent'])->toBeNull();
 });

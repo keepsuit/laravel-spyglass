@@ -2,18 +2,22 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * @internal
  */
 class ExceptionsController extends Controller
 {
-    protected const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
+    public const array TONES = ['unresolved' => 'error', 'resolved' => 'ok'];
+
+    public const string NOTE = 'Recorded occurrences: at most one a minute per exception and scope.';
 
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {
@@ -25,7 +29,8 @@ class ExceptionsController extends Controller
      */
     public function index(Request $request): array
     {
-        $filters = $this->filters($request, ['status' => 'in:unresolved,resolved', 'class' => '', 'scope' => '']);
+        $filters = $this->filters($request, ['range' => 'in:'.implode(',', array_keys(self::HOURS)), 'status' => 'in:unresolved,resolved', 'class' => '', 'scope' => '']);
+        $range = $filters['range'] ?? '24h';
         $groups = $this->queries->groups(array_filter([
             'status' => match ($filters['status'] ?? null) {
                 'resolved' => 'resolved',
@@ -37,6 +42,7 @@ class ExceptionsController extends Controller
         ], fn ($value) => $value !== null), page: $this->page($request));
 
         return Widget::page('Exceptions', [
+            self::chart($this->queries->hourly($from = Buckets::start(self::HOURS[$range], self::HOUR), array_intersect_key($filters, array_flip(['class', 'scope']))), $from),
             Widget::table('groups', 'Exceptions', [
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
@@ -44,12 +50,25 @@ class ExceptionsController extends Controller
                 Widget::field('count', 'Count', 'number'),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime'),
                 Widget::field('status', 'Status', 'status', self::TONES),
-            ], array_map($this->group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
+            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}', filters: ['status', 'class', 'scope']),
         ], [
+            $this->rangeFilter($range),
             Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
-            Widget::filter('class', 'Class', $filters['class'] ?? null),
-            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('class', 'Class', $filters['class'] ?? null, suggestions: $this->suggestions($this->queries->classes())),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
+    }
+
+    /**
+     * Recorded occurrences as bars.
+     *
+     * @param  list<array<string, mixed>>  $rows  as `ExceptionQueries::hourly()`
+     * @return array<string, mixed>
+     */
+    public static function chart(array $rows, CarbonInterface $from, string $label = 'Recorded exceptions'): array
+    {
+        return Widget::series('recorded', $label, 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
+            Buckets::fill($rows, $from, self::HOUR, ['count']), ['range', 'class', 'scope'], style: 'bars', note: self::NOTE, step: self::HOUR);
     }
 
     /**
@@ -62,7 +81,7 @@ class ExceptionsController extends Controller
 
         abort_if($group === null, 404);
 
-        $group = $this->group((array) $group);
+        $group = self::group((array) $group);
         $occurrences = $this->queries->occurrences($fingerprint, page: $page);
 
         return Widget::page($group['class'], [
@@ -122,7 +141,7 @@ class ExceptionsController extends Controller
      * @param  array<string, mixed>  $group
      * @return array<string, mixed>
      */
-    protected function group(array $group): array
+    public static function group(array $group): array
     {
         return [
             ...$group,

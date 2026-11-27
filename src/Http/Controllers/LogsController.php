@@ -2,20 +2,24 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * @internal
  */
 class LogsController extends Controller
 {
-    protected const array TONES = [
+    public const array TONES = [
         'emergency' => 'error', 'alert' => 'error', 'critical' => 'error', 'error' => 'error',
         'warning' => 'warning', 'notice' => 'info', 'info' => 'info', 'debug' => 'info',
     ];
+
+    public const string NOTE = 'Recorded entries: at most one a minute per message and source.';
 
     public function __construct(Spyglass $spyglass, protected LogQueries $queries)
     {
@@ -27,10 +31,14 @@ class LogsController extends Controller
      */
     public function index(Request $request): array
     {
-        $filters = $this->filters($request, ['level' => 'in:'.implode(',', array_keys(self::TONES)), 'scope' => '']);
-        $entries = $this->queries->entries($filters, page: $this->page($request));
+        $filters = $this->filters($request, ['range' => 'in:'.implode(',', array_keys(self::HOURS)), 'level' => 'in:'.implode(',', array_keys(self::TONES)), 'scope' => '']);
+        $range = $filters['range'] ?? '24h';
+        $from = Buckets::start(self::HOURS[$range], self::HOUR);
+        $by = array_filter(['level' => $filters['level'] ?? null, 'scope' => $filters['scope'] ?? null], fn ($value) => $value !== null);
+        $entries = $this->queries->entries($by, page: $this->page($request));
 
         return Widget::page('Logs', [
+            self::chart($this->queries->hourly($from, $by), $from),
             Widget::table('entries', 'Logs', [
                 Widget::field('logged_at', 'Logged at', 'datetime'),
                 Widget::field('level', 'Level', 'status', self::TONES),
@@ -40,9 +48,36 @@ class LogsController extends Controller
                 Widget::field('scope_label', 'Scope'),
             ], $this->rows($entries->items()), $entries, link: 'logs/{id}', filters: ['level', 'scope']),
         ], [
+            $this->rangeFilter($range),
             Widget::filter('level', 'Level', $filters['level'] ?? null, array_map(ucfirst(...), array_combine(array_keys(self::TONES), array_keys(self::TONES)))),
-            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
+    }
+
+    /**
+     * Recorded entries as bars, levels folded into their tone.
+     *
+     * @param  list<array<string, mixed>>  $rows  as `LogQueries::hourly()`
+     * @return array<string, mixed>
+     */
+    public static function chart(array $rows, CarbonInterface $from, string $label = 'Recorded log entries'): array
+    {
+        $hours = Buckets::fill($rows, $from, self::HOUR, array_keys(self::TONES));
+        $lines = ['error' => 'Errors', 'warning' => 'Warnings', 'info' => 'Notices'];
+
+        $points = array_map(function (array $hour) use ($lines) {
+            $point = ['bucket' => $hour['bucket'], ...array_fill_keys(array_keys($lines), 0)];
+
+            foreach (self::TONES as $level => $tone) {
+                $point[$tone] += $hour[$level] ?? 0;
+            }
+
+            return $point;
+        }, $hours);
+
+        return Widget::series('recorded', $label, 'bucket', array_map(
+            fn (string $tone, string $label) => ['key' => $tone, 'label' => $label, 'tone' => $tone], array_keys($lines), $lines,
+        ), $points, ['range', 'level', 'scope'], style: 'bars', note: self::NOTE, step: self::HOUR);
     }
 
     /**

@@ -80,11 +80,32 @@ You can publish the config file with:
 php artisan vendor:publish --tag="spyglass-config"
 ```
 
+The dashboard is served at `/spyglass` (`SPYGLASS_PATH`), behind the `viewSpyglass` gate. Its assets ship prebuilt in `dist/`, built by CI on `main`: there is nothing to publish.
+
 ## Testing
 
 ```bash
 composer test
 ```
+
+## Dashboard development
+
+The dashboard is a React application in `resources/js`. CI builds it into `dist/` and commits the build on `main`; pull requests never carry `dist/`, which is ignored. Build it locally to try a change in an application:
+
+```bash
+npm install
+npm run build   # or `npm run dev` to rebuild on change
+npm test
+```
+
+To look at it with demo data for every module, serve the Testbench workbench and open http://localhost:8000/spyglass:
+
+```bash
+composer serve   # builds a SQLite database, seeds it and starts the server
+composer build   # reseeds without restarting: the demo data is relative to now
+```
+
+The workbench lives in `workbench/`: `WorkbenchServiceProvider` opens the gate and resolves a tenant scope, `DatabaseSeeder` writes the demo data. With `npm run dev` running in another terminal, reloading the page picks up frontend changes.
 
 ## Changelog
 

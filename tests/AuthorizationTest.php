@@ -11,13 +11,13 @@ it('denies access outside the local environment by default', function () {
 it('allows access in the local environment by default', function () {
     $this->app['env'] = 'local';
 
-    $this->get('/spyglass')->assertNoContent();
+    $this->get('/spyglass')->assertOk();
 });
 
 it('uses the viewSpyglass gate defined by the application', function () {
     Gate::define('viewSpyglass', fn ($user = null) => true);
 
-    $this->get('/spyglass')->assertNoContent();
+    $this->get('/spyglass')->assertOk();
 });
 
 it('can be overridden with an auth callback', function () {
@@ -29,7 +29,7 @@ it('can be overridden with an auth callback', function () {
     Spyglass::auth(fn () => true);
     $this->app['env'] = 'staging';
 
-    $this->get('/spyglass')->assertNoContent();
+    $this->get('/spyglass')->assertOk();
 });
 
 it('registers the routes under the configured path and middleware', function () {

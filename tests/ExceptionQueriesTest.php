@@ -78,3 +78,16 @@ it('bounds every query', function () {
         ->and($log[0]['query'])->toContain('exists')->toContain('limit 101')
         ->and($log[1]['query'])->toContain('limit 1');
 });
+
+it('suggests classes and scopes, bounded and in order', function () {
+    seedExceptionGroup(sha1('suggest-logic'), ['class' => LogicException::class], ['tenant:b', 'tenant:a']);
+    seedExceptionGroup(sha1('suggest-domain'), ['class' => DomainException::class], ['tenant:a']);
+    Spyglass::connection()->enableQueryLog();
+
+    $classes = exceptionQueries()->classes(1000);
+    $scopes = exceptionQueries()->scopes(1000);
+
+    expect($classes)->toContain(DomainException::class, LogicException::class)->toBe(collect($classes)->unique()->sort()->values()->all())
+        ->and($scopes)->toContain('tenant:a', 'tenant:b')->toBe(collect($scopes)->unique()->sort()->values()->all())
+        ->and(collect(Spyglass::connection()->getQueryLog())->pluck('query')->every(fn (string $sql) => str_contains($sql, 'limit 100')))->toBeTrue();
+});

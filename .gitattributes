@@ -18,3 +18,11 @@
 /UPGRADING.md       export-ignore
 /phpstan.neon.dist  export-ignore
 /phpstan-baseline.neon  export-ignore
+/resources/js       export-ignore
+/package.json       export-ignore
+/package-lock.json  export-ignore
+/tsconfig.json      export-ignore
+/vite.config.ts     export-ignore
+
+# Built dashboard: review the sources, not the bundle
+/dist/** linguist-generated

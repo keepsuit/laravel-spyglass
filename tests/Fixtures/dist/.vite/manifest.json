@@ -1,0 +1,9 @@
+{
+  "resources/js/main.tsx": {
+    "file": "assets/main-Fx1x2x3.js",
+    "name": "main",
+    "src": "resources/js/main.tsx",
+    "isEntry": true,
+    "css": ["assets/main-Fx4x5x6.css"]
+  }
+}

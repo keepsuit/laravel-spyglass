@@ -27,7 +27,7 @@ class QueueQueries
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Counters per 5-minute bucket, oldest first, with buckets in UTC. Beyond the row limit the oldest buckets are left out.
+     * Counters per stored 5-minute bucket, oldest first, with buckets in UTC; only buckets with counts. Beyond the row limit the oldest buckets are left out.
      *
      * @param  list<'queue'|'job'>  $groupBy
      * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
@@ -78,6 +78,23 @@ class QueueQueries
             ->orderByDesc('failed_at')
             ->orderByDesc('id')
             ->paginate($this->clamp($perPage, 100), page: $page);
+    }
+
+    /**
+     * Scopes of the failed jobs, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function scopes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(QueueModule::FAILED_JOBS)
+            ->whereNotNull('scope')
+            ->distinct()
+            ->orderBy('scope')
+            ->limit($this->clamp($limit, 100))
+            ->pluck('scope')
+            ->map(fn ($scope) => (string) $scope)
+            ->all());
     }
 
     /**
