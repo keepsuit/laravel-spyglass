@@ -5,10 +5,11 @@ use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Keepsuit\Spyglass\Facades\Spyglass;
+use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 
 function dashboardAssets(): array
 {
-    $manifest = json_decode(file_get_contents(__DIR__.'/../dist/.vite/manifest.json'), true);
+    $manifest = json_decode(file_get_contents(__DIR__.'/Fixtures/dist/.vite/manifest.json'), true);
     $entry = $manifest['resources/js/main.tsx'];
 
     return ['js' => $entry['file'], 'css' => $entry['css'][0]];
@@ -78,3 +79,9 @@ it('serves the shell and the assets under a custom path', function () {
         Container::setInstance($this->app);
     }
 });
+
+it('says how to build the dashboard when the build is missing', function () {
+    DashboardController::$dist = __DIR__.'/missing';
+
+    $this->withoutExceptionHandling()->get('/spyglass');
+})->throws(RuntimeException::class, 'npm run build');

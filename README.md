@@ -80,7 +80,7 @@ You can publish the config file with:
 php artisan vendor:publish --tag="spyglass-config"
 ```
 
-The dashboard is served at `/spyglass` (`SPYGLASS_PATH`), behind the `viewSpyglass` gate. Its assets ship prebuilt in `dist/`: there is nothing to publish.
+The dashboard is served at `/spyglass` (`SPYGLASS_PATH`), behind the `viewSpyglass` gate. Its assets ship prebuilt in `dist/`, built by CI on `main`: there is nothing to publish.
 
 ## Testing
 
@@ -90,7 +90,7 @@ composer test
 
 ## Dashboard development
 
-The dashboard is a React application in `resources/js`, built into `dist/` and committed: rebuild it after every change.
+The dashboard is a React application in `resources/js`. CI builds it into `dist/` and commits the build on `main`; pull requests never carry `dist/`, which is ignored. Build it locally to try a change in an application:
 
 ```bash
 npm install

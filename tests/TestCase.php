@@ -7,6 +7,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Facade;
+use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\SpyglassServiceProvider;
 use Keepsuit\Spyglass\Tests\Fixtures\TestModule;
@@ -55,6 +56,8 @@ class TestCase extends Orchestra
 
     protected function defineEnvironment($app): void
     {
+        // The real build is made by CI on main; the tests never depend on it.
+        DashboardController::$dist = __DIR__.'/Fixtures/dist';
         Spyglass::$modules = ['test' => TestModule::class];
 
         $app['config']->set([
