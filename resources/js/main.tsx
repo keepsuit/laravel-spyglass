@@ -46,10 +46,11 @@ function App() {
                             key={module.key}
                             to={module.key}
                             aria-current={module.key === current ? 'page' : undefined}
-                            className={`flex min-h-11 items-center rounded-lg px-3 whitespace-nowrap transition-colors duration-150 md:min-h-9 ${
+                            // A border, not a ring: the scrolling nav clips anything drawn outside the box.
+                            className={`flex min-h-11 items-center rounded-lg border px-3 whitespace-nowrap transition-colors duration-150 md:min-h-9 ${
                                 module.key === current
-                                    ? 'bg-surface font-semibold text-ink ring-1 ring-line before:mr-2.5 before:size-2 before:rounded-full before:bg-accent'
-                                    : 'text-muted hover:bg-surface/60 hover:text-ink'
+                                    ? 'border-line bg-surface font-semibold text-ink before:mr-2.5 before:size-2 before:rounded-full before:bg-accent'
+                                    : 'border-transparent text-muted hover:bg-surface/60 hover:text-ink'
                             }`}
                         >
                             {module.label}
