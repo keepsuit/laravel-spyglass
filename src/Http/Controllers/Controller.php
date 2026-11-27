@@ -58,6 +58,23 @@ abstract class Controller
     }
 
     /**
+     * Known values offered by a free text filter, scopes with their label.
+     *
+     * @param  iterable<string>  $values
+     * @return array<string, string>
+     */
+    protected function suggestions(iterable $values, bool $scopes = false): array
+    {
+        $values = array_values(array_unique([...$values]));
+
+        if ($values === []) {
+            return [];
+        }
+
+        return $scopes ? $this->spyglass->scopeLabels($values) : array_combine($values, $values);
+    }
+
+    /**
      * Where an exception group or a log message came from.
      *
      * @param  array<int, object>  $sources

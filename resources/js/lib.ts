@@ -11,7 +11,8 @@ export type Tone = 'ok' | 'info' | 'warning' | 'error';
 
 export type Field = { key: string; label: string; type: string; tones?: Record<string, Tone> };
 export type Action = { key: string; label: string; url: string };
-export type Filter = { key: string; label: string; value: string | null; options: { value: string; label: string }[] | null };
+export type Choice = { value: string; label: string };
+export type Filter = { key: string; label: string; value: string | null; options: Choice[] | null; suggestions?: Choice[] };
 export type Row = Record<string, unknown>;
 
 export type MetricWidget = { type: 'metric'; key: string; label: string; value: number | string | null; filters: string[]; link?: string; tone?: Tone };

@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Date;
  *
  * @phpstan-type Field array{key: string, label: string, type: string, tones?: array<string, string>}
  * @phpstan-type Action array{key: string, label: string, url: string}
- * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>}
+ * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>, suggestions?: list<array{value: string, label: string}>}
  */
 final class Widget
 {
@@ -149,16 +149,22 @@ final class Widget
     }
 
     /**
+     * Free text filters can suggest known values while still accepting any other.
+     *
      * @param  array<string, string>|null  $options  value => label; null for free text
+     * @param  array<string, string>|null  $suggestions  value => label, for free text
      * @return Filter
      */
-    public static function filter(string $key, string $label, ?string $value, ?array $options = null): array
+    public static function filter(string $key, string $label, ?string $value, ?array $options = null, ?array $suggestions = null): array
     {
+        $list = fn (array $items) => array_map(fn ($value, $label) => ['value' => (string) $value, 'label' => $label], array_keys($items), $items);
+
         return [
             'key' => $key,
             'label' => $label,
             'value' => $value,
-            'options' => $options === null ? null : array_map(fn ($value, $label) => ['value' => (string) $value, 'label' => $label], array_keys($options), $options),
+            'options' => $options === null ? null : $list($options),
+            ...($suggestions === null ? [] : ['suggestions' => $list($suggestions)]),
         ];
     }
 

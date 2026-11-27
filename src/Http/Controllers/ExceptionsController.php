@@ -47,8 +47,8 @@ class ExceptionsController extends Controller
             ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'),
         ], [
             Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
-            Widget::filter('class', 'Class', $filters['class'] ?? null),
-            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('class', 'Class', $filters['class'] ?? null, suggestions: $this->suggestions($this->queries->classes())),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
     }
 

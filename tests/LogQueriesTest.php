@@ -65,3 +65,15 @@ it('paginates and bounds every query', function () {
         ->and(collect(Spyglass::connection()->getQueryLog())->pluck('query')->map(fn (string $sql) => str($sql)->match('/limit \d+/')->value())->all())
         ->toBe(['limit 3', 'limit 3', 'limit 101']);
 });
+
+it('suggests scopes, bounded and in order', function () {
+    seedLogEntry('a', '2026-03-01 12:00:00', ['scope' => 'tenant:b']);
+    seedLogEntry('b', '2026-03-01 12:00:00', ['scope' => 'tenant:a']);
+    seedLogEntry('c', '2026-03-01 12:00:00', ['scope' => 'tenant:a']);
+    Spyglass::connection()->enableQueryLog();
+
+    $scopes = logQueries()->scopes(1000);
+
+    expect($scopes)->toContain('tenant:a', 'tenant:b')->toBe(collect($scopes)->unique()->sort()->values()->all())
+        ->and(Spyglass::connection()->getQueryLog()[0]['query'])->toContain('limit 100');
+});

@@ -98,10 +98,10 @@ body {
         border-color 120ms var(--ease);
 }
 
-/* The page's own action, outlined in the brand orange. */
-.btn-accent {
-    border-color: var(--accent);
-    color: var(--accent-ink);
+/* A square button holding only an icon. */
+.btn-icon {
+    width: 2rem;
+    padding: 0;
 }
 
 .btn:active:not(:disabled) {
@@ -157,6 +157,10 @@ body {
 @media (pointer: coarse) {
     .btn {
         height: 2.75rem;
+    }
+
+    .btn-icon {
+        width: 2.75rem;
     }
 }
 

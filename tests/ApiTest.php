@@ -449,10 +449,40 @@ it('describes logs and shows an entry with its sources', function () {
     $this->getJson('/spyglass/api/logs/999')->assertNotFound();
 });
 
-it('describes health checks', function () {
-    $checks = apiWidget($this->getJson('/spyglass/api/health')->assertOk()->json(), 'checks');
+it('describes health checks, with the unit of each measure', function () {
+    $checks = collect(apiWidget($this->getJson('/spyglass/api/health')->assertOk()->json(), 'checks')['rows']);
 
-    expect($checks['type'])->toBe('table')
-        ->and(collect($checks['rows'])->firstWhere('label', 'Environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
-        ->and(collect($checks['rows'])->firstWhere('label', 'Database '.config('database.default'))['status'] ?? null)->toBe('ok');
+    $value = fn (string $prefix) => $checks->first(fn (array $check) => str_starts_with($check['label'], $prefix))['value'] ?? null;
+
+    expect($checks->firstWhere('label', 'Environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
+        ->and($checks->firstWhere('label', 'Database '.config('database.default'))['status'] ?? null)->toBe('ok')
+        ->and($value('Database '))->toMatch('/^\d+(\.\d)? ms$/')
+        ->and($value('Cache '))->toMatch('/^\d+(\.\d)? ms$/')
+        ->and($value('Queue '))->toBe('0 pending');
+});
+
+it('suggests known values for the free text filters', function () {
+    Spyglass::resolveScopeLabelsUsing(fn (array $scopes) => array_combine($scopes, array_map(strtoupper(...), $scopes)));
+    Date::setTestNow('2026-01-01 12:04:00');
+    DB::table(QueueModule::AGGREGATES)->insert(['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'emails', 'job' => 'A', 'processed' => 1]);
+    DB::table(QueueModule::FAILED_JOBS)->insert([
+        'uuid' => 'u-1', 'connection' => 'database', 'queue' => 'emails', 'job' => 'A', 'attempts' => 1,
+        'exception_class' => 'E', 'fingerprint' => str_repeat('a', 40), 'failed_at' => '2026-01-01 11:00:00', 'scope' => 'tenant:acme',
+    ]);
+    seedExceptionGroup(str_repeat('a', 40), scopes: ['tenant:acme']);
+    apiLogEntry('error', 'Disk full');
+
+    $suggestions = fn (string $uri) => collect($this->getJson($uri)->assertOk()->json('filters'))->pluck('suggestions', 'key')->all();
+
+    expect($suggestions('/spyglass/api/queue'))->toMatchArray([
+        'range' => null,
+        'queue' => [['value' => 'emails', 'label' => 'emails']],
+        'job' => [['value' => 'A', 'label' => 'A']],
+        'scope' => [['value' => 'tenant:acme', 'label' => 'TENANT:ACME']],
+    ])
+        ->and($suggestions('/spyglass/api/exceptions'))->toMatchArray([
+            'class' => [['value' => RuntimeException::class, 'label' => RuntimeException::class]],
+            'scope' => [['value' => 'tenant:acme', 'label' => 'TENANT:ACME']],
+        ])
+        ->and($suggestions('/spyglass/api/logs'))->toMatchArray(['scope' => []]);
 });

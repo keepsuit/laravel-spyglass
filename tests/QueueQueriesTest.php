@@ -290,3 +290,13 @@ it('reports a failure when Artisan fails', function (string $method) {
     expect(queueQueries()->{$method}($uuid))->toBe(Outcome::Failed)
         ->and(DB::table(QueueModule::FAILED_JOBS)->count())->toBe(1);
 })->with(['retry', 'forget']);
+
+it('suggests scopes of the failed jobs, bounded and in order', function () {
+    queueIndexFailedJob('u-1', ['scope' => 'tenant:b']);
+    queueIndexFailedJob('u-2', ['scope' => 'tenant:a']);
+    queueIndexFailedJob('u-3');
+    Spyglass::connection()->enableQueryLog();
+
+    expect(queueQueries()->scopes(1000))->toBe(['tenant:a', 'tenant:b'])
+        ->and(Spyglass::connection()->getQueryLog()[0]['query'])->toContain('limit 100');
+});

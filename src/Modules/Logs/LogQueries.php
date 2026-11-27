@@ -53,6 +53,24 @@ class LogQueries
             ->simplePaginate(max(1, min($perPage, 100)), page: $page);
     }
 
+    /**
+     * Scopes of the entries, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function scopes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(LogsModule::ENTRIES)
+            ->where('kind', 'log')
+            ->whereNotNull('scope')
+            ->distinct()
+            ->orderBy('scope')
+            ->limit(max(1, min($limit, 100)))
+            ->pluck('scope')
+            ->map(fn ($scope) => (string) $scope)
+            ->all());
+    }
+
     protected function entriesTable(): Builder
     {
         return $this->spyglass->connection()->table(LogsModule::ENTRIES)

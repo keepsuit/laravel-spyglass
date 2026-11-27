@@ -102,6 +102,43 @@ class ExceptionQueries
     }
 
     /**
+     * Exception classes of the groups, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function classes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(ExceptionsModule::GROUPS)
+            ->where('kind', 'exception')
+            ->where('source_type', '')
+            ->whereNotNull('class')
+            ->distinct()
+            ->orderBy('class')
+            ->limit($this->clamp($limit))
+            ->pluck('class')
+            ->map(fn ($class) => (string) $class)
+            ->all());
+    }
+
+    /**
+     * Scopes of the occurrences, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function scopes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(ExceptionsModule::OCCURRENCES)
+            ->where('kind', 'exception')
+            ->whereNotNull('scope')
+            ->distinct()
+            ->orderBy('scope')
+            ->limit($this->clamp($limit))
+            ->pluck('scope')
+            ->map(fn ($scope) => (string) $scope)
+            ->all());
+    }
+
+    /**
      * The total row of each group: the others count its sources.
      */
     protected function groupsTable(): Builder

@@ -1,9 +1,10 @@
+import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Select } from '@base-ui/react/select';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './app.css';
-import { api, ApiError, href, navigate, setParams, useLocation, type Filter, type MetricWidget, type Page as PageData } from './lib';
+import { api, ApiError, href, navigate, setParams, useLocation, type Choice, type Filter, type MetricWidget, type Page as PageData } from './lib';
 import { card, Details, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
 
 const client = new QueryClient({
@@ -118,8 +119,18 @@ function Page({ path, search, module }: { path: string; search: string; module?:
                     {query.dataUpdatedAt > 0 && (
                         <span className="tabular-nums">Updated {new Date(query.dataUpdatedAt).toLocaleTimeString()}</span>
                     )}
-                    <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} className="btn btn-accent">
-                        {query.isFetching ? 'Refreshing…' : 'Refresh'}
+                    <button
+                        type="button"
+                        onClick={() => query.refetch()}
+                        disabled={query.isFetching}
+                        aria-label={query.isFetching ? 'Refreshing' : 'Refresh'}
+                        title="Refresh"
+                        className="btn btn-icon"
+                    >
+                        <svg viewBox="0 0 24 24" className={`size-4 shrink-0 ${query.isFetching ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <path d="M21 3v6h-6" />
+                        </svg>
                     </button>
                 </div>
             </header>
@@ -203,16 +214,7 @@ function Filters({ filters, params }: { filters: Filter[]; params: URLSearchPara
                 filter.options ? (
                     <OptionFilter key={filter.key} filter={filter} fromUrl={params.get(filter.key)} />
                 ) : (
-                    <label key={`${filter.key}-${filter.value}`} className="flex flex-col gap-1 text-muted">
-                        {filter.label}
-                        <input
-                            type="search"
-                            defaultValue={filter.value ?? ''}
-                            onKeyDown={(event) => event.key === 'Enter' && setParams({ [filter.key]: event.currentTarget.value.trim() })}
-                            onBlur={(event) => event.currentTarget.value.trim() !== (filter.value ?? '') && setParams({ [filter.key]: event.currentTarget.value.trim() })}
-                            className={`${control} w-44`}
-                        />
-                    </label>
+                    <TextFilter key={`${filter.key}-${filter.value}`} filter={filter} />
                 ),
             )}
             {active && (
@@ -221,6 +223,58 @@ function Filters({ filters, params }: { filters: Filter[]; params: URLSearchPara
                 </button>
             )}
         </div>
+    );
+}
+
+/** Free text, with the known values as suggestions: Enter, leaving the field or picking a suggestion applies it. */
+function TextFilter({ filter }: { filter: Filter }) {
+    const [value, setValue] = useState(filter.value ?? '');
+    const apply = (next: string) => next.trim() !== (filter.value ?? '') && setParams({ [filter.key]: next.trim() });
+
+    return (
+        <Autocomplete.Root
+            items={filter.suggestions ?? []}
+            value={value}
+            onValueChange={(next, details) => {
+                setValue(next);
+                if (details.reason === 'item-press') apply(next);
+            }}
+            itemToStringValue={(item: Choice) => item.value}
+            filter={(item: Choice, query) => `${item.value} ${item.label}`.toLowerCase().includes(query.trim().toLowerCase())}
+            openOnInputClick
+        >
+            <label className="flex flex-col gap-1 text-muted">
+                {filter.label}
+                <Autocomplete.Input
+                    onKeyDown={(event) => event.key === 'Enter' && apply(event.currentTarget.value)}
+                    onBlur={(event) => apply(event.currentTarget.value)}
+                    className={`${control} w-48`}
+                />
+            </label>
+            {(filter.suggestions?.length ?? 0) > 0 && (
+                <Autocomplete.Portal>
+                    <Autocomplete.Positioner sideOffset={4} className="z-10 outline-none">
+                        <Autocomplete.Popup className="w-[max(var(--anchor-width),16rem)] max-w-[var(--available-width)] rounded-xl border border-line bg-surface p-1 text-ink shadow-lg shadow-ink/10">
+                            <Autocomplete.Empty>
+                                <p className="px-3 py-2 text-muted">No known value matches: press Enter to filter by this text.</p>
+                            </Autocomplete.Empty>
+                            <Autocomplete.List className="max-h-[min(20rem,var(--available-height))] overflow-y-auto">
+                                {(item: Choice) => (
+                                    <Autocomplete.Item
+                                        key={item.value}
+                                        value={item}
+                                        className="flex cursor-default flex-col rounded-lg px-3 py-1.5 outline-none select-none data-highlighted:bg-bg pointer-coarse:py-3"
+                                    >
+                                        <span className="break-words">{item.label}</span>
+                                        {item.label !== item.value && <span className="text-xs text-muted">{item.value}</span>}
+                                    </Autocomplete.Item>
+                                )}
+                            </Autocomplete.List>
+                        </Autocomplete.Popup>
+                    </Autocomplete.Positioner>
+                </Autocomplete.Portal>
+            )}
+        </Autocomplete.Root>
     );
 }
 

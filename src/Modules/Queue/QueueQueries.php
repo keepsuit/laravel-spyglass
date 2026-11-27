@@ -91,6 +91,23 @@ class QueueQueries
     }
 
     /**
+     * Scopes of the failed jobs, for filter suggestions.
+     *
+     * @return list<string>
+     */
+    public function scopes(int $limit = 100): array
+    {
+        return array_values($this->spyglass->connection()->table(QueueModule::FAILED_JOBS)
+            ->whereNotNull('scope')
+            ->distinct()
+            ->orderBy('scope')
+            ->limit($this->clamp($limit, 100))
+            ->pluck('scope')
+            ->map(fn ($scope) => (string) $scope)
+            ->all());
+    }
+
+    /**
      * The failer record (connection, queue, payload, exception) with the index columns, `uuid` and `failed_at`
      * as a UTC string. Null when it is gone from the failer, and the index row is removed.
      *

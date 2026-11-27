@@ -41,7 +41,7 @@ class LogsController extends Controller
             ], $this->rows($entries->items()), $entries, link: 'logs/{id}', filters: ['level', 'scope']),
         ], [
             Widget::filter('level', 'Level', $filters['level'] ?? null, array_map(ucfirst(...), array_combine(array_keys(self::TONES), array_keys(self::TONES)))),
-            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
     }
 

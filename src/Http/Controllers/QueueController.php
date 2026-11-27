@@ -78,9 +78,9 @@ class QueueController extends Controller
             ), $failed, link: 'queue/failed-jobs/{uuid}', actions: $this->actions('{uuid}'), filters: ['queue', 'job', 'scope']),
         ], [
             Widget::filter('range', 'Range', $range, ['1h' => 'Last hour', '24h' => 'Last 24 hours', '7d' => 'Last 7 days']),
-            Widget::filter('queue', 'Queue', $filters['queue'] ?? null),
-            Widget::filter('job', 'Job', $filters['job'] ?? null),
-            Widget::filter('scope', 'Scope', $filters['scope'] ?? null),
+            Widget::filter('queue', 'Queue', $filters['queue'] ?? null, suggestions: $this->suggestions($this->queries->queues($from)->pluck('queue'))),
+            Widget::filter('job', 'Job', $filters['job'] ?? null, suggestions: $this->suggestions($this->queries->totals($from, $to, ['job'])->pluck('job'))),
+            Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
     }
 
