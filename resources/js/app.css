@@ -1,0 +1,71 @@
+@import 'tailwindcss';
+
+:root {
+    color-scheme: light;
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --line: #d5dce4;
+    --ink: #18222f;
+    --muted: #5b6878;
+    --brass: #8f6418;
+    --ok: #2e7d5b;
+    --info: #2f6a9a;
+    --warning: #9a6210;
+    --error: #b2363a;
+    --series-1: #257de0;
+    --series-2: #f47230;
+    --series-3: #00b894;
+    --series-4: #f2a600;
+    --series-5: #ee7fac;
+    --series-6: #008a17;
+    --series-7: #6a4ce2;
+    --series-8: #ec4647;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+        --bg: #111821;
+        --surface: #17212d;
+        --line: #2a3646;
+        --ink: #e4e9ef;
+        --muted: #93a0b0;
+        --brass: #d6a54f;
+        --ok: #5fc495;
+        --info: #74b0e0;
+        --warning: #e6b04f;
+        --error: #f08a8c;
+        --series-1: #338ced;
+        --series-2: #e76624;
+        --series-3: #00a888;
+        --series-4: #d28e05;
+        --series-5: #e24d8b;
+        --series-6: #0aac23;
+        --series-7: #9887ef;
+        --series-8: #eb6263;
+    }
+}
+
+@theme inline {
+    --color-bg: var(--bg);
+    --color-surface: var(--surface);
+    --color-line: var(--line);
+    --color-ink: var(--ink);
+    --color-muted: var(--muted);
+    --color-brass: var(--brass);
+    --color-ok: var(--ok);
+    --color-info: var(--info);
+    --color-warning: var(--warning);
+    --color-error: var(--error);
+}
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+}
+
+:focus-visible {
+    outline: 2px solid var(--brass);
+    outline-offset: 2px;
+}

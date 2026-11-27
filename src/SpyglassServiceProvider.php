@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Commands\PruneCommand;
+use Keepsuit\Spyglass\Http\Controllers\DashboardController;
 use Keepsuit\Spyglass\Http\Controllers\ExceptionsController;
 use Keepsuit\Spyglass\Http\Controllers\HealthController;
 use Keepsuit\Spyglass\Http\Controllers\LogsController;
@@ -159,7 +160,8 @@ class SpyglassServiceProvider extends PackageServiceProvider
             ->middleware([...config('spyglass.middleware', []), Authorize::class])
             ->name('spyglass.')
             ->group(function () {
-                Route::get('/', fn () => response()->noContent())->name('index');
+                Route::get('/', [DashboardController::class, 'index'])->name('index');
+                Route::get('assets/{file}', [DashboardController::class, 'asset'])->name('asset');
 
                 // The class the `web` group uses, so the check runs once: Laravel 13 renamed it.
                 $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : 'Illuminate\Foundation\Http\Middleware\ValidateCsrfToken';
@@ -205,6 +207,9 @@ class SpyglassServiceProvider extends PackageServiceProvider
                         Route::get('health', [HealthController::class, 'index'])->name('health');
                     });
                 });
+
+                // Client-side routes. Unknown API paths stay JSON 404s.
+                Route::get('{view}', [DashboardController::class, 'index'])->where('view', '(?!api(/|$)|assets/).*')->name('view');
             });
     }
 }
