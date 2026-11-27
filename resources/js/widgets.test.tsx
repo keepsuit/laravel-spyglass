@@ -84,6 +84,14 @@ describe('Table', () => {
         expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false);
     });
 
+    it('labels the cells after the first and marks the empty ones, for the layout of a phone', () => {
+        wrap(<Table widget={{ ...table, rows: [{ ...table.rows[0], failed_at: null }] }} ignored={[]} filtered={false} page={null} />);
+
+        const [title, date] = screen.getAllByRole('cell');
+        expect([title.dataset.label, title.dataset.empty]).toEqual([undefined, undefined]);
+        expect([date.dataset.label, date.dataset.empty]).toEqual(['Failed at', 'true']);
+    });
+
     it('explains an empty table', () => {
         wrap(<Table widget={{ ...table, rows: [], pagination: null }} ignored={[]} filtered={false} page={null} />);
         expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();

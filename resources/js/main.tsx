@@ -1,11 +1,11 @@
 import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Select } from '@base-ui/react/select';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { Fragment, StrictMode, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, StrictMode, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './app.css';
 import { api, ApiError, href, navigate, setParams, useLocation, type Choice, type Filter, type GroupWidget, type MetricWidget, type Page as PageData, type Widget } from './lib';
-import { card, Details, Group, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
+import { breakable, card, Details, Group, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
 
 const client = new QueryClient({
     defaultOptions: {
@@ -25,6 +25,12 @@ function App() {
     const modules = useQuery({ queryKey: ['modules'], queryFn: () => api<{ modules: Module[] }>(''), refetchInterval: false });
     const list = modules.data?.modules ?? [];
     const current = path.split('/')[0];
+    const nav = useRef<HTMLElement>(null);
+
+    // On a phone the row of modules scrolls: the current one may start out of sight.
+    useEffect(() => {
+        nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest', container: 'nearest' } as ScrollIntoViewOptions);
+    }, [current, list.length]);
 
     useEffect(() => {
         if (path === '' && list.length > 0) navigate(href(list[0].key), true);
@@ -40,7 +46,7 @@ function App() {
                     </svg>
                     <span className="text-lg font-semibold tracking-tight">Spyglass</span>
                 </div>
-                <nav aria-label="Modules" className="flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:px-3">
+                <nav ref={nav} aria-label="Modules" className="scroller flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:px-3">
                     {list.map((module) => (
                         <Link
                             key={module.key}
@@ -114,7 +120,7 @@ function Page({ path, search, module }: { path: string; search: string; module?:
                             {module.label}
                         </Link>
                     )}
-                    <h1 className="truncate text-2xl font-semibold tracking-tight">{page?.title ?? module?.label ?? ' '}</h1>
+                    <h1 className="text-2xl font-semibold tracking-tight break-words">{breakable(page?.title ?? module?.label ?? ' ')}</h1>
                 </div>
                 <div className="flex items-center gap-3 text-muted">
                     {query.dataUpdatedAt > 0 && (
@@ -211,7 +217,7 @@ function Filters({ filters, params }: { filters: Filter[]; params: URLSearchPara
     const active = filters.some((filter) => params.get(filter.key));
 
     return (
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="grid grid-cols-2 items-end gap-3 sm:flex sm:flex-wrap">
             {filters.map((filter) =>
                 filter.options ? (
                     <OptionFilter key={filter.key} filter={filter} fromUrl={params.get(filter.key)} />
@@ -250,7 +256,7 @@ function TextFilter({ filter }: { filter: Filter }) {
                 <Autocomplete.Input
                     onKeyDown={(event) => event.key === 'Enter' && apply(event.currentTarget.value)}
                     onBlur={(event) => apply(event.currentTarget.value)}
-                    className={`${control} w-48`}
+                    className={`${control} w-full sm:w-48`}
                 />
             </label>
             {(filter.suggestions?.length ?? 0) > 0 && (
@@ -288,7 +294,7 @@ function OptionFilter({ filter, fromUrl }: { filter: Filter; fromUrl: string | n
         <div className="flex flex-col gap-1 text-muted">
             <Select.Root items={items} value={filter.value} onValueChange={(value) => setParams({ [filter.key]: value as string | null })}>
                 <Select.Label>{filter.label}</Select.Label>
-                <Select.Trigger className={`${control} flex min-w-40 items-center justify-between gap-2 hover:border-muted`}>
+                <Select.Trigger className={`${control} flex w-full items-center sm:w-auto sm:min-w-40 justify-between gap-2 hover:border-muted`}>
                     <Select.Value />
                     <Select.Icon className="text-muted">▾</Select.Icon>
                 </Select.Trigger>

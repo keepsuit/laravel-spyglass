@@ -200,3 +200,116 @@ table[data-wide] .long {
     --ts-chart-tooltip-shadow: 0 10px 15px -3px color-mix(in oklab, var(--ink) 6%, transparent);
     --ts-chart-tooltip-font: 400 0.75rem/1.6 system-ui, sans-serif;
 }
+
+/*
+ * On a phone a table row reads as a list of label and value: the columns would not fit across. By viewport, not
+ * container: the half-width cards of a desktop are as narrow as a phone and keep their columns.
+ */
+@media (width < 40rem) {
+    .rows :is(table, tbody, tr, td) {
+        display: block;
+    }
+
+    .rows thead {
+        display: none;
+    }
+
+    .rows tr {
+        padding: 0.75rem 1rem;
+    }
+
+    .rows td {
+        display: flex;
+        gap: 0.75rem;
+        padding: 0.125rem 0;
+        text-align: start;
+    }
+
+    .rows td:first-child {
+        padding-bottom: 0.375rem;
+    }
+
+    .rows td[data-label]::before {
+        content: attr(data-label);
+        flex: none;
+        width: 7rem;
+        color: var(--muted);
+    }
+
+    .rows td[data-empty] {
+        display: none;
+    }
+
+    .rows td > * {
+        min-width: 0;
+    }
+
+    .rows table .long {
+        min-width: 0;
+    }
+
+    /* The relative time and the exact one on a line, as there is room across. */
+    .rows time {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        column-gap: 0.5rem;
+        white-space: normal;
+    }
+}
+
+/* A row that scrolls fades out at each edge with more beyond it. */
+@property --fade-start {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+
+@property --fade-end {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+
+.scroller {
+    --fade-size: 2.5rem;
+    scrollbar-width: none;
+    scroll-padding-inline: var(--fade-size);
+    mask:
+        linear-gradient(black, black) no-clip subtract,
+        linear-gradient(to right, black, transparent) 0 0 / var(--fade-start) 100% no-repeat no-clip,
+        linear-gradient(to right, transparent, black) 100% 0 / var(--fade-end) 100% no-repeat no-clip;
+    animation:
+        reveal-fade-start linear both,
+        hide-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range:
+        0 var(--fade-size),
+        calc(100% - var(--fade-size)) 100%;
+}
+
+@keyframes reveal-fade-start {
+    to {
+        --fade-start: var(--fade-size);
+    }
+}
+
+@keyframes hide-fade-end {
+    from {
+        --fade-end: var(--fade-size);
+    }
+}
+
+/* Without scroll-driven animations: shadows under covers that scroll with the row, on its solid ground. */
+@supports not (animation-timeline: scroll()) {
+    @media (width < 48rem) {
+        .scroller {
+            background:
+                linear-gradient(to right, var(--surface) 30%, transparent) left / 2.5rem 100% no-repeat local,
+                linear-gradient(to left, var(--surface) 30%, transparent) right / 2.5rem 100% no-repeat local,
+                radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--ink) 15%, transparent), transparent) left / 0.75rem 100% no-repeat,
+                radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--ink) 15%, transparent), transparent) right / 0.75rem 100% no-repeat,
+                var(--surface);
+        }
+    }
+}

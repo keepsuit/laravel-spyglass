@@ -29,7 +29,7 @@ import {
     type Tone,
 } from './lib';
 
-export function Link({ to, className, children }: { to: string; className?: string; children: ReactNode }) {
+export function Link({ to, className, children, ...rest }: { to: string; className?: string; children: ReactNode; 'aria-current'?: 'page' }) {
     const onClick = (event: MouseEvent) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
@@ -37,7 +37,7 @@ export function Link({ to, className, children }: { to: string; className?: stri
     };
 
     return (
-        <a href={href(to)} onClick={onClick} className={className}>
+        <a href={href(to)} onClick={onClick} className={className} {...rest}>
             {children}
         </a>
     );
@@ -139,13 +139,13 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
                     </Expandable>
                 );
             }
-            return compact ? <span className={`block max-w-[48ch] break-words ${text.length > 40 ? 'long' : ''}`}>{breakable(text)}</span> : <span className="break-words whitespace-pre-wrap">{text}</span>;
+            return compact ? <span className={`block max-w-[48ch] break-words ${text.length > 40 ? 'long' : ''}`}>{breakable(text)}</span> : <span className="break-words whitespace-pre-wrap">{breakable(text)}</span>;
         }
     }
 }
 
 /** Class names and paths wrap after a separator rather than inside a name. */
-function breakable(text: string): ReactNode[] {
+export function breakable(text: string): ReactNode[] {
     return text.split(/(?<=[\\/])/).flatMap((part, index) => (index ? [<wbr key={index} />, part] : [part]));
 }
 
@@ -204,7 +204,7 @@ export function Group({ widget, children }: { widget: GroupWidget; children: Rea
 /** Consecutive metrics share one row. A linked metric opens its page. */
 export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored: (filters: string[]) => string[] }) {
     return (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))]">
+        <div className="grid grid-cols-2 gap-3 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 sm:grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))]">
             {metrics.map((metric) => {
                 const notes = ignored(metric.filters);
                 const body = (
@@ -291,7 +291,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
             {widget.rows.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">{widget.empty ?? (filtered ? 'Nothing matches these filters.' : 'Nothing recorded yet.')}</p>
             ) : (
-                <div className="overflow-x-auto">
+                <div className="rows overflow-x-auto">
                     <table className="w-full text-left text-[13px]" data-wide={widget.columns.length > 6 || undefined}>
                         <thead className="border-y border-line text-xs text-muted">
                             <tr>
@@ -315,7 +315,13 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                                     className={`align-top transition-colors duration-150 ${link ? 'cursor-pointer hover:bg-bg/70' : ''}`}
                                 >
                                     {widget.columns.map((column, columnIndex) => (
-                                        <td key={column.key} className={`${cellX} py-2.5 ${alignRight(column) ? 'text-right' : ''}`}>
+                                        <td
+                                            key={column.key}
+                                            // Read only on a phone, where each row is a list of label and value.
+                                            data-label={columnIndex > 0 ? column.label : undefined}
+                                            data-empty={[null, undefined, ''].includes(row[column.key] as never) || undefined}
+                                            className={`${cellX} py-2.5 ${alignRight(column) ? 'text-right' : ''}`}
+                                        >
                                             {link && columnIndex === 0 && column.type !== 'link' ? (
                                                 <Link to={fill(link, row)} className="font-medium">
                                                     <Value field={column} value={row[column.key]} compact />
@@ -408,6 +414,8 @@ export function merge(points: Row[], x: string, keys: string[], size: number): {
 }
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const day = 86_400_000;
 
 /** The span of a bucket, as the tooltip heading. */
 function span(start: Date, end: Date): string {
@@ -440,7 +448,9 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
             .range(widget.lines.map((_, index) => colour(index)));
         const series = new Set(shown.map((line) => line.label));
         const integer = (value: number) => (Number.isInteger(value) ? formatNumber(value) : '');
-        const format = (value: Date) => formatShort(value.getTime());
+        // A day per tick over several days, the hour over one: a full date on each would not fit a phone.
+        const times = widget.points.map((point) => new Date(String(point[widget.x])).getTime());
+        const format = (value: Date) => (Math.max(...times) - Math.min(...times) > 1.5 * day ? dayFormat : timeFormat).format(value);
         const step = (widget.step ?? 0) * 1000;
 
         // The rows only change with the bucket size, not with every pixel of a resize.
