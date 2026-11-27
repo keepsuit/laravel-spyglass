@@ -27,6 +27,11 @@ class LogQueries
         return app(Sources::class)->of('log', LogsModule::signature($level, $message), $limit);
     }
 
+    public function entry(int $id): ?object
+    {
+        return $this->entriesTable()->where('id', $id)->first();
+    }
+
     /**
      * Entries, newest first. `log_context` is JSON cut at 4096 characters, so it may not decode.
      *
@@ -35,9 +40,7 @@ class LogQueries
      */
     public function entries(array $filters = [], int $perPage = 50, int $page = 1): Paginator
     {
-        return $this->spyglass->connection()->table(LogsModule::ENTRIES)
-            ->select(['id', 'level', 'message', 'body as log_context', 'recorded_at as logged_at', 'source_type', 'source', 'source_id', 'scope', 'context'])
-            ->where('kind', 'log')
+        return $this->entriesTable()
             ->where(array_intersect_key($filters, array_flip(['level', 'scope'])))
             // Whole seconds at both ends: `to` takes in the milliseconds of its second.
             ->when($filters['from'] ?? null, fn (Builder $query, CarbonInterface $from) => $query->where('recorded_at', '>=', $from->copy()->utc()->startOfSecond()->format('Y-m-d H:i:s.v')))
@@ -45,5 +48,12 @@ class LogQueries
             ->orderByDesc('recorded_at')
             ->orderByDesc('id')
             ->simplePaginate(max(1, min($perPage, 100)), page: $page);
+    }
+
+    protected function entriesTable(): Builder
+    {
+        return $this->spyglass->connection()->table(LogsModule::ENTRIES)
+            ->select(['id', 'level', 'message', 'body as log_context', 'recorded_at as logged_at', 'source_type', 'source', 'source_id', 'scope', 'context'])
+            ->where('kind', 'log');
     }
 }

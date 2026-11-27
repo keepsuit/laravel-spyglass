@@ -210,7 +210,7 @@ class QueueQueries
             ->whereBetween('bucket', [$this->utc($from), $this->utc($to)])
             // Unfiltered reads take the total rows: summing scoped rows too would count jobs twice.
             ->where($this->filters($filters + ['scope' => '']))
-            ->groupBy($groups);
+            ->when($groups !== [], fn (Builder $query) => $query->groupBy($groups));
     }
 
     /**

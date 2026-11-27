@@ -9,7 +9,8 @@ return [
 
     /*
      * Dashboard URI prefix and route middleware. Access is always checked
-     * with the `viewSpyglass` gate or the `Spyglass::auth()` callback.
+     * with the `viewSpyglass` gate or the `Spyglass::auth()` callback. Keep `web`:
+     * its session and CSRF check protect the dashboard's actions.
      */
     'path' => env('SPYGLASS_PATH', 'spyglass'),
 
