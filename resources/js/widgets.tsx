@@ -42,6 +42,8 @@ const pills: Record<Tone, string> = {
     error: 'bg-error/10 text-error before:bg-error',
 };
 
+const dots: Record<Tone, string> = { ok: 'bg-ok', info: 'bg-info', warning: 'bg-warning', error: 'bg-error' };
+
 export function Status({ value, tone }: { value: string; tone?: Tone }) {
     return (
         <span
@@ -93,6 +95,18 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
             );
         case 'status':
             return <Status value={String(value)} tone={field.tones?.[String(value)]} />;
+        case 'runs': {
+            const runs = value as { status: string; started_at: string }[];
+            const failed = runs.filter((run) => ['error', 'warning'].includes(field.tones?.[run.status] ?? '')).length;
+            return (
+                <span className="inline-flex items-end gap-0.5" role="img" aria-label={`${runs.length} recent runs, ${failed} not successful`}>
+                    {runs.map((run, index) => {
+                        const tone = field.tones?.[run.status];
+                        return <span key={index} title={`${run.status}, ${formatDate(run.started_at)}`} className={`h-4 w-1.5 rounded-[2px] ${tone ? dots[tone] : 'bg-line'}`} />;
+                    })}
+                </span>
+            );
+        }
         case 'link': {
             const link = value as { label: string; url: string | null };
             return link.url ? (
@@ -149,7 +163,6 @@ function Heading({ label, ignored, children }: { label: string; ignored: string[
     );
 }
 
-const dots: Record<Tone, string> = { ok: 'bg-ok', info: 'bg-info', warning: 'bg-warning', error: 'bg-error' };
 const deltaTones = { ok: 'text-ok', error: 'text-error' };
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
 const signed = new Intl.NumberFormat(undefined, { signDisplay: 'exceptZero' });

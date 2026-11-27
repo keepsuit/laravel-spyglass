@@ -230,6 +230,7 @@ it('describes the schedule', function () {
             'next_run' => '2026-01-01T12:01:00.000Z',
             'missed' => false,
         ])
+        ->and($tasks['rows'][0]['recent'][array_key_last($tasks['rows'][0]['recent'])])->toBe(['status' => 'failed', 'started_at' => '2026-01-01T12:00:00.250Z'])
         // Only declared columns and the values links need.
         ->and($tasks['rows'][0])->not->toHaveKey('command');
 

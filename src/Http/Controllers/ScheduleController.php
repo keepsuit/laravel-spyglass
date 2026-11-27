@@ -29,6 +29,7 @@ class ScheduleController extends Controller
                 Widget::field('label', 'Task'),
                 Widget::field('expression', 'Expression'),
                 Widget::field('last_status', 'Last run', 'status', self::TONES),
+                Widget::field('recent', 'Recent runs', 'runs', self::TONES),
                 Widget::field('last_started_at', 'Last started at', 'datetime'),
                 Widget::field('last_duration_ms', 'Duration', 'duration'),
                 Widget::field('next_run', 'Next run', 'datetime'),

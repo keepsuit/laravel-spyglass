@@ -26,6 +26,9 @@ class ScheduleQueries
 
     protected const int MAX_TASKS = 1000;
 
+    /** Runs in a task's recent outcomes: retention always keeps the newest ten. */
+    protected const int RECENT_RUNS = 10;
+
     /** A task the scheduler stopped publishing this long before the newest publish was removed from the schedule. */
     protected const int STALE_AFTER = 300;
 
@@ -37,7 +40,8 @@ class ScheduleQueries
      * since, and passed after the task was first seen. Stale tasks are never missed.
      *
      * Each task has the columns of its row, `environments` decoded, and `stale`, `next_run` (null when
-     * stale), `last_run` and `missed`.
+     * stale), `last_run`, `missed` and `recent`: the `status` and `started_at` of its latest runs, oldest
+     * first, or null for a sub-minute task, whose successful runs are not kept.
      *
      * @return Collection<int, array<string, mixed>>
      */
@@ -52,19 +56,24 @@ class ScheduleQueries
             ->limit(self::MAX_TASKS)
             ->get();
 
-        $lastRuns = $this->lastRuns($tasks->pluck('key')->all());
+        $lastRuns = $this->lastRuns($tasks->pluck('key')->all(), self::RECENT_RUNS);
         $newest = is_string($tasks->first()?->newest) ? $this->date($tasks->first()->newest) : Date::now();
 
-        return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key][0] ?? null, $lastRuns[$task->key][1] ?? null, $newest));
+        return $tasks->map(fn (object $task) => $this->task($task, $lastRuns[$task->key] ?? [], $newest));
     }
 
     /**
-     * @param  array<string, mixed>|null  $lastRun
-     * @param  array<string, mixed>|null  $previousRun
+     * @param  list<array<string, mixed>>  $runs  newest first
      * @return array<string, mixed>
      */
-    protected function task(stdClass $task, ?array $lastRun, ?array $previousRun, CarbonInterface $newest): array
+    protected function task(stdClass $task, array $runs, CarbonInterface $newest): array
     {
+        [$lastRun, $previousRun] = [$runs[0] ?? null, $runs[1] ?? null];
+        $recent = $task->repeat_seconds !== null ? null : array_reverse(array_map(fn (array $run, int $i) => [
+            'status' => $this->status($run, superseded: (bool) $task->without_overlapping && $i > 0),
+            'started_at' => $run['started_at'],
+        ], $runs, array_keys($runs)));
+
         $overlapping = $lastRun !== null && $this->overlapped($lastRun, $previousRun, (bool) $task->without_overlapping);
 
         $stale = $this->date($task->last_seen_at)->lt($newest->copy()->subSeconds(self::STALE_AFTER));
@@ -103,6 +112,7 @@ class ScheduleQueries
             'stale' => $stale,
             'last_run' => $lastRun,
             'overlapping' => $overlapping,
+            'recent' => $recent,
         ];
 
         return [...$task, 'next_run' => $stale ? null : $this->nextRun($task), 'missed' => ! $stale && $this->missed($task)];
@@ -167,12 +177,12 @@ class ScheduleQueries
     }
 
     /**
-     * The two newest runs of each task, newest first: one `LIMIT 2` index lookup per task, in a single query per chunk.
+     * The newest runs of each task, newest first: one `LIMIT` index lookup per task, in a single query per chunk.
      *
      * @param  array<mixed>  $keys
      * @return array<string, list<array<string, mixed>>>
      */
-    protected function lastRuns(array $keys): array
+    protected function lastRuns(array $keys, int $limit): array
     {
         $runs = [];
 
@@ -182,7 +192,7 @@ class ScheduleQueries
             foreach ($chunk as $key) {
                 $last = $this->runsOf($key)
                     ->select(['id', 'task', 'status', 'started_at', 'finished_at', 'duration_ms', 'exit_code'])
-                    ->limit(2);
+                    ->limit($limit);
                 $query = $query ? $query->unionAll($last) : $last;
             }
 

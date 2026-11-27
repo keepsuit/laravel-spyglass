@@ -168,8 +168,8 @@ final class Widget
     }
 
     /**
-     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json or link
-     * (`{label, url}`, url null when not linkable). A status maps its values to the tones ok, info, warning and error; others are neutral.
+     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json, link
+     * (`{label, url}`, url null when not linkable) or runs (a list of `{status, started_at}`, oldest first). A status maps its values to the tones ok, info, warning and error; others are neutral.
      *
      * @param  array<string, string>|null  $tones
      * @return Field
@@ -260,6 +260,7 @@ final class Widget
             $type === 'number' && is_numeric($value) => $value + 0,
             $type === 'duration' && is_numeric($value) => (int) $value,
             $type === 'boolean' => (bool) $value,
+            $type === 'runs' && is_array($value) => array_map(fn (array $run) => ['status' => $run['status'], 'started_at' => self::value($run['started_at'], 'datetime')], $value),
             default => $value,
         };
     }

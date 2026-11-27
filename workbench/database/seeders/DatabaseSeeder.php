@@ -36,7 +36,10 @@ class DatabaseSeeder extends Seeder
             ['sitemap:generate', '30 3 * * *', 'interrupted', null],
         ];
 
-        foreach ($tasks as [$label, $expression, $status, $duration]) {
+        // Every how many runs each task fails: never, often, now and then.
+        $failEvery = [0, 7, 2, 4, 5];
+
+        foreach ($tasks as $t => [$label, $expression, $status, $duration]) {
             DB::table('spyglass_schedule_tasks')->insert([
                 'key' => sha1($label),
                 'label' => $label,
@@ -49,7 +52,7 @@ class DatabaseSeeder extends Seeder
 
             for ($i = 0; $i < 12; $i++) {
                 $started = $this->now->copy()->subHours($i * 6 + 1);
-                $runStatus = $i === 0 ? $status : ($i % 5 === 3 ? 'failed' : 'success');
+                $runStatus = $i === 0 ? $status : ($failEvery[$t] && $i % $failEvery[$t] === 1 ? 'failed' : 'success');
                 $open = in_array($runStatus, ['running', 'interrupted'], true);
 
                 DB::table('spyglass_schedule_runs')->insert([

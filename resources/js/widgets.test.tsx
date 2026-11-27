@@ -25,6 +25,17 @@ describe('Value', () => {
         expect(document.body.textContent).toContain(text);
     });
 
+    it('renders recent runs as a strip in their tones', () => {
+        const runs = [
+            { status: 'success', started_at: '2026-01-01T10:00:00.000Z' },
+            { status: 'failed', started_at: '2026-01-01T11:00:00.000Z' },
+        ];
+        render(<Value field={field('runs', { tones: { success: 'ok', failed: 'error' } })} value={runs} />);
+
+        const strip = screen.getByRole('img', { name: '2 recent runs, 1 not successful' });
+        expect([...strip.children].map((run) => run.className.includes('bg-error'))).toEqual([false, true]);
+    });
+
     it('renders a status with its tone', () => {
         render(<Value field={field('status', { tones: { failed: 'error' } })} value="failed" />);
         expect(screen.getByText('failed').className).toContain('text-error');
