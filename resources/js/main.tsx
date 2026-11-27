@@ -1,10 +1,10 @@
 import { Select } from '@base-ui/react/select';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { StrictMode, useEffect, type ReactNode } from 'react';
+import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './app.css';
 import { api, ApiError, href, navigate, setParams, useLocation, type Filter, type MetricWidget, type Page as PageData } from './lib';
-import { Details, Link, Metrics, Series, Table } from './widgets';
+import { Details, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
 
 const client = new QueryClient({
     defaultOptions: {
@@ -59,14 +59,22 @@ function App() {
                 ) : path === '' ? (
                     !modules.isPending && list.length === 0 && <p className="text-muted">All modules are disabled in config/spyglass.php.</p>
                 ) : (
-                    <Page path={path} search={search} module={list.find((module) => module.key === current)} />
+                    <Page key={path} path={path} search={search} module={list.find((module) => module.key === current)} />
                 )}
             </main>
         </div>
     );
 }
 
+// Kept outside the page: it survives the move back to the list after the page it came from is gone.
+let carried: Notice | null = null;
+
 function Page({ path, search, module }: { path: string; search: string; module?: Module }) {
+    const [notice, setNotice] = useState<Notice | null>(carried);
+
+    useEffect(() => {
+        carried = null;
+    }, []);
     const query = useQuery({
         queryKey: ['page', path, search],
         queryFn: () => api<PageData>(path + search),
@@ -81,6 +89,14 @@ function Page({ path, search, module }: { path: string; search: string; module?:
     // A page that is gone (a failed job retried, a module disabled) is not shown with its stale data.
     const gone = query.error instanceof ApiError && query.error.status === 404;
     const page = gone ? undefined : query.data;
+
+    // An action removed the page it was shown on (a failed job retried or deleted): back to the list.
+    useEffect(() => {
+        if (gone && notice?.tone === 'ok' && module && path !== module.key) {
+            carried = notice;
+            navigate(href(module.key), true);
+        }
+    }, [gone, notice, module, path]);
     const params = new URLSearchParams(search);
     const active = (page?.filters ?? []).filter((filter) => params.get(filter.key));
     const ignored = (filters: string[]) => active.filter((filter) => !filters.includes(filter.key)).map((filter) => filter.label);
@@ -112,15 +128,21 @@ function Page({ path, search, module }: { path: string; search: string; module?:
                 </div>
             </header>
 
+            {notice && (
+                <p role="status" className={`rounded-md border bg-surface px-4 py-2 font-medium ${notice.tone === 'ok' ? 'border-ok/40 text-ok' : 'border-error/40 text-error'}`}>
+                    {notice.text}
+                </p>
+            )}
+
             {page && page.filters.length > 0 && <Filters filters={page.filters} params={params} />}
 
             {query.error && !page ? (
                 <Problem error={query.error} back={module} />
             ) : (
-                <>
+                <NoticeContext value={setNotice}>
                     {query.error && <Problem error={query.error} />}
                     {page && renderWidgets(page, ignored, active.length > 0, pageParam ? Number(pageParam) : null)}
-                </>
+                </NoticeContext>
             )}
         </div>
     );

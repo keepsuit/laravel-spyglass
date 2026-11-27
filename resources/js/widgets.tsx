@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, useContext, useState, type MouseEvent, type ReactNode } from 'react';
 import {
     api,
     fill,
@@ -148,13 +148,18 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
     );
 }
 
+export type Notice = { tone: 'ok' | 'error'; text: string };
+
+/** Action outcomes go to the page: the row that triggered one may be gone after the refresh. */
+export const NoticeContext = createContext<(notice: Notice) => void>(() => {});
+
 function Actions({ actions, row = {} }: { actions: Action[]; row?: Row }) {
     const client = useQueryClient();
-    const [notice, setNotice] = useState<{ tone: Tone; text: string } | null>(null);
+    const notify = useContext(NoticeContext);
     const mutation = useMutation({
         mutationFn: (action: Action) => api(fill(action.url, row), { method: 'POST' }),
-        onSuccess: (_, action) => setNotice({ tone: 'ok', text: `${action.label}: done.` }),
-        onError: (error) => setNotice({ tone: 'error', text: error.message }),
+        onSuccess: (_, action) => notify({ tone: 'ok', text: `${action.label}: done.` }),
+        onError: (error) => notify({ tone: 'error', text: error.message }),
         onSettled: () => client.invalidateQueries(),
     });
 
@@ -171,11 +176,6 @@ function Actions({ actions, row = {} }: { actions: Action[]; row?: Row }) {
                     {action.label}
                 </button>
             ))}
-            {notice && (
-                <span role="status" className={`text-xs ${notice.tone === 'ok' ? 'text-ok' : 'text-error'}`}>
-                    {notice.text}
-                </span>
-            )}
         </div>
     );
 }
@@ -217,7 +217,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                         </thead>
                         <tbody className="divide-y divide-line border-t border-line">
                             {widget.rows.map((row, index) => (
-                                <tr key={index} onClick={(event) => open(event, row)} className={`align-top ${link ? 'cursor-pointer hover:bg-bg' : ''}`}>
+                                <tr key={link ? fill(link, row) : index} onClick={(event) => open(event, row)} className={`align-top ${link ? 'cursor-pointer hover:bg-bg' : ''}`}>
                                     {widget.columns.map((column, columnIndex) => (
                                         <td key={column.key} className={`px-4 py-2 ${alignRight(column) ? 'text-right' : ''}`}>
                                             {link && columnIndex === 0 && column.type !== 'link' ? (

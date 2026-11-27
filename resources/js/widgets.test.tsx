@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DetailsWidget, Field, SeriesWidget, TableWidget } from './lib';
-import { Details, Series, Table, Value } from './widgets';
+import { Details, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -123,5 +123,31 @@ describe('Details', () => {
         expect(screen.getByText('Count')).toBeTruthy();
         expect(screen.getByText('3')).toBeTruthy();
         expect(screen.getByRole('button', { name: 'Resolve' })).toBeTruthy();
+    });
+});
+
+describe('Actions', () => {
+    it.each([
+        [409, 'The command failed.'],
+        [404, 'Already retried or removed.'],
+    ])('reports a %i answer to the page with its message', async (status, message) => {
+        const calls: string[] = [];
+        const notices: Notice[] = [];
+        globalThis.fetch = (async (url: string) => {
+            calls.push(url);
+            return new Response(JSON.stringify({ outcome: 'failed', message }), { status, headers: { 'Content-Type': 'application/json' } });
+        }) as typeof fetch;
+
+        wrap(
+            <NoticeContext value={(notice) => notices.push(notice)}>
+                <Table widget={{ ...table, rows: [table.rows[0], { ...table.rows[0], uuid: 'c' }] }} ignored={[]} filtered={false} page={null} />
+            </NoticeContext>,
+        );
+
+        fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+        await waitFor(() => expect(notices).toEqual([{ tone: 'error', text: message }]));
+        expect(calls).toEqual(['/api/queue/failed-jobs/a%2Fb/retry']);
+        expect(screen.queryByText(message)).toBeNull();
     });
 });
