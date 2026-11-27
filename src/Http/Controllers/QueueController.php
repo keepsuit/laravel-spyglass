@@ -4,6 +4,7 @@ namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Http\Descriptor as D;
 use Keepsuit\Spyglass\Modules\Queue\Outcome;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
@@ -68,7 +69,7 @@ class QueueController extends Controller
                 D::field('queue', 'Queue'),
                 D::field('exception_class', 'Exception'),
                 D::field('attempts', 'Attempts', 'number'),
-                D::field('scope', 'Scope'),
+                D::field('scope_label', 'Scope'),
             ], $this->rows($failed->items()), $failed, link: 'queue/failed-jobs/{uuid}', actions: [
                 D::action('retry', 'Retry', 'queue/failed-jobs/{uuid}/retry'),
                 D::action('delete', 'Delete', 'queue/failed-jobs/{uuid}/delete'),
@@ -93,7 +94,12 @@ class QueueController extends Controller
                 D::field('failed_at', 'Failed at', 'datetime'),
                 D::field('exception', 'Exception'),
                 D::field('payload', 'Payload', 'json'),
-            ], (array) $job, [
+            ], [
+                ...(array) $job,
+                // The failer returns the uuid as `id`, and its `failed_at` in the application's timezone.
+                'uuid' => $uuid,
+                'failed_at' => Date::parse(data_get($job, 'failed_at'), config('app.timezone')),
+            ], [
                 D::action('retry', 'Retry', "queue/failed-jobs/{$uuid}/retry"),
                 D::action('delete', 'Delete', "queue/failed-jobs/{$uuid}/delete"),
             ]),

@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
+use Keepsuit\Spyglass\Http\Middleware\EnsureModuleEnabled;
 use Keepsuit\Spyglass\Modules\Health\HealthModule;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
@@ -88,6 +89,8 @@ it('answers 404 on every endpoint of a disabled module and leaves it out of the 
     foreach ($routes as $route) {
         [$method, $uri] = apiRequest($route);
 
+        // Routes with parameters answer 404 for a missing record as well.
+        expect($route->gatherMiddleware())->toContain(EnsureModuleEnabled::class.':'.$module);
         $this->{$method}($uri)->assertNotFound();
     }
 
@@ -162,7 +165,7 @@ it('describes the queue', function () {
             'link' => 'queue/failed-jobs/{uuid}',
             'pagination' => ['page' => 1, 'per_page' => 25, 'has_more' => false, 'total' => 1],
         ])
-        ->and(apiWidget($page, 'failed_jobs')['rows'][0])->toMatchArray(['uuid' => 'u-1', 'scope' => 'Acme', 'failed_at' => '2026-01-01T11:00:00.000Z'])
+        ->and(apiWidget($page, 'failed_jobs')['rows'][0])->toMatchArray(['uuid' => 'u-1', 'scope' => 'tenant:acme', 'scope_label' => 'Acme', 'failed_at' => '2026-01-01T11:00:00.000Z'])
         ->and(collect($page['filters'])->pluck('key')->all())->toBe(['range', 'queue', 'job', 'scope']);
 
     $filtered = $this->getJson('/spyglass/api/queue?queue=emails&range=7d')->assertOk()->json();
@@ -176,11 +179,19 @@ it('describes the queue', function () {
 });
 
 it('shows a failed job', function () {
+    // Laravel applies `app.timezone` at boot.
+    config(['app.timezone' => 'Europe/Rome']);
+    date_default_timezone_set('Europe/Rome');
+    $this->beforeApplicationDestroyed(fn () => date_default_timezone_set('UTC'));
+    Date::setTestNow(Date::parse('2026-01-01 11:00:00', 'UTC'));
     $uuid = apiFailJob();
 
     $details = apiWidget($this->getJson("/spyglass/api/queue/failed-jobs/{$uuid}")->assertOk()->json(), 'job');
+    $items = collect($details['items'])->pluck('value', 'key');
 
-    expect(collect($details['items'])->firstWhere('key', 'payload')['value'])->toBeArray()->toHaveKey('uuid', $uuid)
+    expect($items['uuid'])->toBe($uuid)
+        ->and($items['failed_at'])->toBe('2026-01-01T11:00:00.000Z')
+        ->and(collect($details['items'])->firstWhere('key', 'payload')['value'])->toBeArray()->toHaveKey('uuid', $uuid)
         ->and(collect($details['actions'])->pluck('url')->all())->toBe(["queue/failed-jobs/{$uuid}/retry", "queue/failed-jobs/{$uuid}/delete"]);
 
     $this->getJson('/spyglass/api/queue/failed-jobs/missing')->assertNotFound();
@@ -293,5 +304,5 @@ it('describes health checks', function () {
 
     expect($checks['type'])->toBe('table')
         ->and(collect($checks['rows'])->firstWhere('key', 'environment'))->toMatchArray(['status' => 'info', 'value' => 'testing'])
-        ->and(collect($checks['rows'])->firstWhere('key', 'database:testing')['status'] ?? null)->toBe('ok');
+        ->and(collect($checks['rows'])->firstWhere('key', 'database:'.config('database.default'))['status'] ?? null)->toBe('ok');
 });

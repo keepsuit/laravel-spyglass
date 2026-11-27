@@ -75,7 +75,7 @@ class ScheduleController extends Controller
                 D::field('overlapped', 'Overlapped', 'boolean'),
                 D::field('exception_class', 'Exception'),
                 D::field('host', 'Host'),
-                D::field('scope', 'Scope'),
+                D::field('scope_label', 'Scope'),
                 D::field('output', 'Output'),
             ], $this->rows($runs->items()), $runs),
         ]);

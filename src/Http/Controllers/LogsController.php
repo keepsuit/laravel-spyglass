@@ -34,7 +34,7 @@ class LogsController extends Controller
                 D::field('message', 'Message'),
                 D::field('source_type', 'Source type'),
                 D::field('source', 'Source'),
-                D::field('scope', 'Scope'),
+                D::field('scope_label', 'Scope'),
             ], $this->rows($entries->items()), $entries, link: 'logs/{id}'),
         ], [
             D::filter('level', 'Level', $filters['level'] ?? null, array_combine(self::LEVELS, array_map('ucfirst', self::LEVELS))),
@@ -61,7 +61,7 @@ class LogsController extends Controller
                 D::field('source_type', 'Source type'),
                 D::field('source', 'Source'),
                 D::field('source_id', 'Source id'),
-                D::field('scope', 'Scope'),
+                D::field('scope_label', 'Scope'),
                 D::field('context', 'Context', 'json'),
                 D::field('log_context', 'Log context', 'json'),
             ], $entry),

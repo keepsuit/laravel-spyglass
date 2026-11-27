@@ -92,7 +92,7 @@ class ExceptionsController extends Controller
                 D::field('source_type', 'Source type'),
                 D::field('source', 'Source'),
                 D::field('user_id', 'User'),
-                D::field('scope', 'Scope'),
+                D::field('scope_label', 'Scope'),
                 D::field('context', 'Context', 'json'),
                 D::field('trace', 'Trace', 'json'),
             ], $this->rows($occurrences->items()), $occurrences),

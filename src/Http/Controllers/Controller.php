@@ -36,7 +36,7 @@ abstract class Controller
     }
 
     /**
-     * Rows as arrays, with the `scope` column shown as its label.
+     * Rows as arrays, with the label of their scope as `scope_label`.
      *
      * @param  iterable<object|array<string, mixed>>  $rows
      * @return list<array<string, mixed>>
@@ -48,8 +48,8 @@ abstract class Controller
         $labels = $scopes === [] ? [] : $this->spyglass->scopeLabels($scopes);
 
         foreach ($rows as &$row) {
-            if (is_string($row['scope'] ?? null)) {
-                $row['scope'] = $labels[$row['scope']];
+            if (array_key_exists('scope', $row)) {
+                $row['scope_label'] = is_string($row['scope']) ? $labels[$row['scope']] : null;
             }
         }
 
