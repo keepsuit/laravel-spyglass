@@ -22,6 +22,11 @@ class TestCase extends Orchestra
 {
     use WithLaravelMigrations;
 
+    /**
+     * The workbench leaves a .env in the Testbench skeleton that points at its demo database.
+     */
+    protected $loadEnvironmentVariables = false;
+
     /** @var list<MessageLogged> */
     public array $spyglassErrors = [];
 
