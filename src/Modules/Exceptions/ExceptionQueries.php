@@ -7,7 +7,7 @@ use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Date;
 use Keepsuit\Spyglass\Spyglass;
-use Keepsuit\Spyglass\Support\Hourly;
+use Keepsuit\Spyglass\Support\Buckets;
 use Keepsuit\Spyglass\Support\Sources;
 use stdClass;
 
@@ -104,7 +104,7 @@ class ExceptionQueries
     }
 
     /**
-     * Recorded occurrences per hour since `$from`, as `Hourly::counts()`. Throttled: at most one a minute per
+     * Recorded occurrences per hour since `$from`, as `Buckets::entries()`. Throttled: at most one a minute per
      * exception and scope.
      *
      * @param  array{class?: string, scope?: string}  $filters
@@ -112,7 +112,7 @@ class ExceptionQueries
      */
     public function hourly(CarbonInterface $from, array $filters = []): array
     {
-        return Hourly::counts('exception', $from, fn (Builder $query) => $query
+        return Buckets::entries('exception', $from, fn (Builder $query) => $query
             ->when(isset($filters['scope']), fn (Builder $query) => $query->where('scope', $filters['scope'] ?? null))
             ->when(isset($filters['class']), fn (Builder $query) => $query->whereIn('signature', fn (Builder $groups) => $groups
                 ->from(ExceptionsModule::GROUPS)

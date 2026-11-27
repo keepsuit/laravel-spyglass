@@ -6,7 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Query\Builder;
 use Keepsuit\Spyglass\Spyglass;
-use Keepsuit\Spyglass\Support\Hourly;
+use Keepsuit\Spyglass\Support\Buckets;
 use Keepsuit\Spyglass\Support\Sources;
 use stdClass;
 
@@ -55,7 +55,7 @@ class LogQueries
     }
 
     /**
-     * Recorded entries per hour and level since `$from`, as `Hourly::counts()`. Throttled: at most one a
+     * Recorded entries per hour and level since `$from`, as `Buckets::entries()`. Throttled: at most one a
      * minute per message, scope and source.
      *
      * @param  array{level?: string, scope?: string}  $filters
@@ -63,7 +63,7 @@ class LogQueries
      */
     public function hourly(CarbonInterface $from, array $filters = []): array
     {
-        return Hourly::counts('log', $from, fn (Builder $query) => $query->where(array_intersect_key($filters, array_flip(['level', 'scope']))), by: 'level');
+        return Buckets::entries('log', $from, fn (Builder $query) => $query->where(array_intersect_key($filters, array_flip(['level', 'scope']))), by: 'level');
     }
 
     /**

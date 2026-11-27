@@ -2,12 +2,14 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Carbon\CarbonInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Queue\Outcome;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
 use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * @internal
@@ -15,6 +17,9 @@ use Keepsuit\Spyglass\Spyglass;
 class QueueController extends Controller
 {
     protected const array RANGES = ['1h' => 1, '24h' => 24, '7d' => 168];
+
+    /** Chart buckets by range, in seconds: whole stored 5-minute buckets, a few hundred points at most. */
+    protected const array STEPS = ['1h' => 300, '24h' => 300, '7d' => 1800];
 
     public const array COUNTERS = ['processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out', 'queued' => 'Queued'];
 
@@ -35,7 +40,7 @@ class QueueController extends Controller
         $page = $this->page($request);
 
         $to = now();
-        $from = $this->queries->rangeStart(self::RANGES[$range]);
+        $from = Buckets::start(self::RANGES[$range], self::STEPS[$range]);
 
         // Aggregates are kept per scope only when configured: otherwise they ignore the scope filter.
         $aggregateFilters = ['range', 'queue', 'job', ...(config('spyglass.modules.queue.aggregate_by_scope') ? ['scope'] : [])];
@@ -51,7 +56,7 @@ class QueueController extends Controller
             ...array_map(fn (array $counter) => Widget::metric($counter['key'], $counter['label'], $totals[$counter['key']] ?? 0, $aggregateFilters), $counters),
             Widget::metric('duration_avg', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration'),
             Widget::metric('duration_max', 'Max duration', self::maxDuration($totals), $aggregateFilters, format: 'duration'),
-            Widget::series('throughput', 'Throughput', 'bucket', $counters, $this->queries->series($from, $to, [], $aggregateBy), $aggregateFilters),
+            self::chart($this->queries->series($from, $to, [], $aggregateBy), $from, self::STEPS[$range], array_keys(self::COUNTERS), $aggregateFilters),
             Widget::table('sizes', 'Queues', [
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
@@ -84,6 +89,21 @@ class QueueController extends Controller
             Widget::filter('job', 'Job', $filters['job'] ?? null, suggestions: $this->suggestions($this->queries->totals($from, $to, ['job'])->pluck('job'))),
             Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
+    }
+
+    /**
+     * Counters over time, in buckets of `$step` seconds.
+     *
+     * @param  iterable<array<string, mixed>>  $rows  as `QueueQueries::series()`
+     * @param  list<string>  $keys
+     * @param  list<string>  $filters
+     * @return array<string, mixed>
+     */
+    public static function chart(iterable $rows, CarbonInterface $from, int $step, array $keys, array $filters = [], string $label = 'Throughput'): array
+    {
+        $lines = array_map(fn (string $key) => ['key' => $key, 'label' => self::COUNTERS[$key]], $keys);
+
+        return Widget::series('throughput', $label, 'bucket', $lines, Buckets::fill($rows, $from, $step, $keys), $filters, step: $step);
     }
 
     /**

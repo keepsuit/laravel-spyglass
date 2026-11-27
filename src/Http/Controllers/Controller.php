@@ -13,8 +13,10 @@ use Keepsuit\Spyglass\Spyglass;
  */
 abstract class Controller
 {
-    /** Ranges of the hourly charts, in hours. */
+    /** Ranges of the charts of hourly entries, in hours. */
     protected const array HOURS = ['24h' => 24, '7d' => 168];
+
+    protected const int HOUR = 3600;
 
     public function __construct(protected Spyglass $spyglass) {}
 

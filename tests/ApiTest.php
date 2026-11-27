@@ -294,8 +294,11 @@ it('describes the queue', function () {
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
     expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
-        ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(2)
+        // Every 5-minute bucket from 11:00 to 12:00, empty ones as zero.
+        ->and(apiWidget($page, 'throughput'))->toMatchArray(['step' => 300])
+        ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(13)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
+        ->and(apiWidget($page, 'throughput')['points'][12])->toMatchArray(['bucket' => '2026-01-01T12:00:00.000Z', 'processed' => 0])
         ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
         ->and(apiWidget($page, 'sizes')['rows'])->toHaveCount(2)
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray([
@@ -528,17 +531,19 @@ it('counts recorded exceptions and log entries per hour, with every hour present
     $chart = apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded');
 
     expect($chart)->toMatchArray(['style' => 'bars', 'filters' => ['range', 'level', 'scope']])
-        ->and($chart['points'])->toHaveCount(24)
-        ->and($chart['points'][0]['bucket'])->toBe('2026-02-28T13:00:00.000Z')
-        ->and($chart['points'][22])->toBe(['bucket' => '2026-03-01T11:00:00.000Z', 'error' => 0, 'warning' => 0, 'info' => 0])
-        ->and($chart['points'][21])->toMatchArray(['warning' => 1])
-        ->and($chart['points'][23])->toMatchArray(['error' => 2, 'warning' => 0]);
+        ->and($chart['step'])->toBe(3600)
+        // From the hour holding the moment a day ago, so the range never cuts its oldest bucket.
+        ->and($chart['points'])->toHaveCount(25)
+        ->and($chart['points'][0]['bucket'])->toBe('2026-02-28T12:00:00.000Z')
+        ->and($chart['points'][23])->toBe(['bucket' => '2026-03-01T11:00:00.000Z', 'error' => 0, 'warning' => 0, 'info' => 0])
+        ->and($chart['points'][22])->toMatchArray(['warning' => 1])
+        ->and($chart['points'][24])->toMatchArray(['error' => 2, 'warning' => 0]);
 
     $fingerprint = str_repeat('a', 40);
     seedExceptionGroup($fingerprint, scopes: ['tenant:a', 'tenant:b']);
     $total = fn (string $query) => array_sum(array_column(apiWidget($this->getJson("/spyglass/api/exceptions?range=7d{$query}")->assertOk()->json(), 'recorded')['points'], 'count'));
 
-    expect(apiWidget($this->getJson('/spyglass/api/exceptions?range=7d')->json(), 'recorded')['points'])->toHaveCount(168)
+    expect(apiWidget($this->getJson('/spyglass/api/exceptions?range=7d')->json(), 'recorded')['points'])->toHaveCount(169)
         ->and($total(''))->toBe(2)
         ->and($total('&scope=tenant:a'))->toBe(1)
         ->and($total('&class='.RuntimeException::class))->toBe(2)
@@ -552,7 +557,7 @@ it('counts entries per hour when the application uses immutable dates', function
         Date::setTestNow('2026-03-01 12:30:00');
         apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
 
-        expect(apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded')['points'])->toHaveCount(24);
+        expect(apiWidget($this->getJson('/spyglass/api/logs')->assertOk()->json(), 'recorded')['points'])->toHaveCount(25);
     } finally {
         Date::useDefault();
     }
@@ -570,4 +575,31 @@ it('shows the average duration per attempt and the max duration of the queue', f
     expect(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 100, 'format' => 'duration'])
         ->and(apiWidget($page, 'duration_max')['value'])->toBe(250)
         ->and(apiWidget($this->getJson('/spyglass/api/queue?range=1h&job=Missing')->json(), 'duration_avg')['value'])->toBeNull();
+});
+
+it('sums the queue over 7 days into regular 30-minute buckets that add up to the cards', function () {
+    Date::setTestNow('2026-01-08 12:04:00');
+    // The application timezone does not move buckets: they are UTC.
+    config(['app.timezone' => 'Europe/Rome']);
+    date_default_timezone_set('Europe/Rome');
+
+    try {
+        DB::table(QueueModule::AGGREGATES)->insert([
+            ['bucket' => '2026-01-01 12:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 1],
+            ['bucket' => '2026-01-05 09:25:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 2],
+            ['bucket' => '2026-01-05 09:05:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'B', 'processed' => 3],
+            ['bucket' => '2026-01-08 12:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 4],
+        ]);
+
+        $page = $this->getJson('/spyglass/api/queue?range=7d')->assertOk()->json();
+        $points = collect(apiWidget($page, 'throughput')['points']);
+        $times = $points->map(fn (array $point) => strtotime($point['bucket']));
+
+        expect(apiWidget($page, 'throughput')['step'])->toBe(1800)
+            ->and($times->sliding(2)->every(fn ($pair) => $pair->last() - $pair->first() === 1800))->toBeTrue()
+            ->and($points->firstWhere('bucket', '2026-01-05T09:00:00.000Z')['processed'])->toBe(5)
+            ->and($points->sum('processed'))->toBe(apiWidget($page, 'processed')['value']);
+    } finally {
+        date_default_timezone_set('UTC');
+    }
 });

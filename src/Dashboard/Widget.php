@@ -108,7 +108,9 @@ final class Widget
 
     /**
      * Points share the `$x` key, a datetime, and a key per line. A line can take the colour of a tone. `$style`
-     * `bars` stacks the lines as bars, one per point. `$note` says how to read the values.
+     * `bars` stacks the lines as bars, one per point. `$note` says how to read the values. With `$step`, in
+     * seconds, points are counts in buckets of that size, every bucket present: the dashboard sums neighbours
+     * into larger buckets to fit its width.
      *
      * @param  list<array{key: string, label: string, tone?: string}>  $lines
      * @param  iterable<array<string, mixed>>  $points
@@ -125,6 +127,7 @@ final class Widget
         ?string $style = null,
         ?string $note = null,
         ?string $width = null,
+        ?int $step = null,
     ): array {
         $columns = [self::field($x, $x, 'datetime')];
 
@@ -140,7 +143,7 @@ final class Widget
             'lines' => $lines,
             'points' => self::rows($columns, $points),
             'filters' => $filters,
-            ...array_filter(compact('style', 'note', 'width'), fn ($option) => $option !== null),
+            ...array_filter(compact('style', 'note', 'width', 'step'), fn ($option) => $option !== null),
         ];
     }
 

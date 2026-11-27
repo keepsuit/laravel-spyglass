@@ -2,11 +2,12 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Spyglass;
-use Keepsuit\Spyglass\Support\Hourly;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * @internal
@@ -32,12 +33,12 @@ class LogsController extends Controller
     {
         $filters = $this->filters($request, ['range' => 'in:'.implode(',', array_keys(self::HOURS)), 'level' => 'in:'.implode(',', array_keys(self::TONES)), 'scope' => '']);
         $range = $filters['range'] ?? '24h';
-        $from = Hourly::start(self::HOURS[$range]);
+        $from = Buckets::start(self::HOURS[$range], self::HOUR);
         $by = array_filter(['level' => $filters['level'] ?? null, 'scope' => $filters['scope'] ?? null], fn ($value) => $value !== null);
         $entries = $this->queries->entries($by, page: $this->page($request));
 
         return Widget::page('Logs', [
-            self::chart($this->queries->hourly($from, $by)),
+            self::chart($this->queries->hourly($from, $by), $from),
             Widget::table('entries', 'Logs', [
                 Widget::field('logged_at', 'Logged at', 'datetime'),
                 Widget::field('level', 'Level', 'status', self::TONES),
@@ -54,13 +55,14 @@ class LogsController extends Controller
     }
 
     /**
-     * Entries per hour as bars, levels folded into their tone.
+     * Recorded entries as bars, levels folded into their tone.
      *
-     * @param  list<array<string, mixed>>  $hours  as `LogQueries::hourly()`
+     * @param  list<array<string, mixed>>  $rows  as `LogQueries::hourly()`
      * @return array<string, mixed>
      */
-    public static function chart(array $hours, string $label = 'Log entries per hour'): array
+    public static function chart(array $rows, CarbonInterface $from, string $label = 'Recorded log entries'): array
     {
+        $hours = Buckets::fill($rows, $from, self::HOUR, array_keys(self::TONES));
         $lines = ['error' => 'Errors', 'warning' => 'Warnings', 'info' => 'Notices'];
 
         $points = array_map(function (array $hour) use ($lines) {
@@ -75,7 +77,7 @@ class LogsController extends Controller
 
         return Widget::series('recorded', $label, 'bucket', array_map(
             fn (string $tone, string $label) => ['key' => $tone, 'label' => $label, 'tone' => $tone], array_keys($lines), $lines,
-        ), $points, ['range', 'level', 'scope'], style: 'bars', note: self::NOTE);
+        ), $points, ['range', 'level', 'scope'], style: 'bars', note: self::NOTE, step: self::HOUR);
     }
 
     /**

@@ -2,12 +2,13 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Spyglass;
-use Keepsuit\Spyglass\Support\Hourly;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * @internal
@@ -41,9 +42,7 @@ class ExceptionsController extends Controller
         ], fn ($value) => $value !== null), page: $this->page($request));
 
         return Widget::page('Exceptions', [
-            Widget::series('recorded', 'Exceptions per hour', 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
-                $this->queries->hourly(Hourly::start(self::HOURS[$range]), array_intersect_key($filters, array_flip(['class', 'scope']))),
-                ['range', 'class', 'scope'], style: 'bars', note: self::NOTE),
+            self::chart($this->queries->hourly($from = Buckets::start(self::HOURS[$range], self::HOUR), array_intersect_key($filters, array_flip(['class', 'scope']))), $from),
             Widget::table('groups', 'Exceptions', [
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
@@ -58,6 +57,18 @@ class ExceptionsController extends Controller
             Widget::filter('class', 'Class', $filters['class'] ?? null, suggestions: $this->suggestions($this->queries->classes())),
             Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
+    }
+
+    /**
+     * Recorded occurrences as bars.
+     *
+     * @param  list<array<string, mixed>>  $rows  as `ExceptionQueries::hourly()`
+     * @return array<string, mixed>
+     */
+    public static function chart(array $rows, CarbonInterface $from, string $label = 'Recorded exceptions'): array
+    {
+        return Widget::series('recorded', $label, 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
+            Buckets::fill($rows, $from, self::HOUR, ['count']), ['range', 'class', 'scope'], style: 'bars', note: self::NOTE, step: self::HOUR);
     }
 
     /**

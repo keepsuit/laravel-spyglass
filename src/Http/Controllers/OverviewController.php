@@ -7,7 +7,7 @@ use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
 use Keepsuit\Spyglass\Modules\Logs\LogQueries;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleQueries;
-use Keepsuit\Spyglass\Support\Hourly;
+use Keepsuit\Spyglass\Support\Buckets;
 
 /**
  * The home page: what needs attention in each enabled module. Health is left out: its checks can take
@@ -40,8 +40,7 @@ class OverviewController extends Controller
 
             $metrics[] = Widget::metric('unresolved_exceptions', 'Unresolved exceptions', $this->count($count, $unresolved->hasMorePages()), link: 'exceptions?status=unresolved', tone: $count > 0 ? 'error' : 'ok');
             $groups['exceptions'] = Widget::group('exceptions', 'Exceptions', [
-                Widget::series('exceptions_per_hour', 'Per hour', 'bucket', [['key' => 'count', 'label' => 'Exceptions', 'tone' => 'error']],
-                    $queries->hourly(Hourly::start(24)), style: 'bars', note: ExceptionsController::NOTE),
+                ExceptionsController::chart($queries->hourly($from = Buckets::start(24, self::HOUR)), $from, 'Recorded in 24h'),
                 Widget::table('unresolved', 'Unresolved', [
                     Widget::field('class', 'Class'),
                     Widget::field('message', 'Message'),
@@ -54,17 +53,14 @@ class OverviewController extends Controller
 
         if (isset($modules['queue'])) {
             $queries = app(QueueQueries::class);
-            $from = $queries->rangeStart(24);
+            $from = Buckets::start(24, 300);
             $totals = $queries->totals($from, now(), [])->first() ?? [];
             $failed = $queries->failedJobs(perPage: self::LISTED);
 
             $metrics[] = Widget::metric('failed_jobs_total', 'Failed jobs', $failed->total(), link: 'queue', tone: $failed->total() > 0 ? 'error' : 'ok');
             $metrics[] = Widget::metric('processed_jobs', 'Jobs processed in 24h', $totals['processed'] ?? 0, link: 'queue');
             $groups['queue'] = Widget::group('queue', 'Queue', [
-                Widget::series('throughput', 'Throughput in 24h', 'bucket', [
-                    ['key' => 'processed', 'label' => QueueController::COUNTERS['processed']],
-                    ['key' => 'failed', 'label' => QueueController::COUNTERS['failed']],
-                ], $queries->series($from, now())),
+                QueueController::chart($queries->series($from, now()), $from, 300, ['processed', 'failed'], label: 'Throughput in 24h'),
                 Widget::table('failed_jobs', 'Latest failed jobs', [
                     Widget::field('job', 'Job'),
                     Widget::field('queue', 'Queue'),
@@ -102,7 +98,7 @@ class OverviewController extends Controller
 
             $metrics[] = Widget::metric('log_entries', 'Log entries in 24h', $this->count(count($entries->items()), $entries->hasMorePages()), link: 'logs');
             $groups['logs'] = Widget::group('logs', 'Logs', [
-                LogsController::chart($queries->hourly(Hourly::start(24)), 'Per hour'),
+                LogsController::chart($queries->hourly($from = Buckets::start(24, self::HOUR)), $from, 'Recorded in 24h'),
                 Widget::table('latest_logs', 'Latest entries', [
                     Widget::field('level', 'Level', 'status', LogsController::TONES),
                     Widget::field('message', 'Message'),

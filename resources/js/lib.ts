@@ -50,6 +50,8 @@ export type SeriesWidget = {
     style?: 'bars';
     note?: string;
     width?: 'half';
+    /** Seconds per bucket: every bucket is present and holds counts. */
+    step?: number;
 };
 export type DetailsWidget = { type: 'details'; key: string; label: string; items: (Field & { value: unknown })[]; actions: Action[]; filters: string[] };
 export type GroupWidget = {

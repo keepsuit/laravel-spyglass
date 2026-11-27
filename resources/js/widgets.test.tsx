@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
-import { densify, Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { bucketSize, Details, Group, merge, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -110,11 +110,24 @@ describe('Series', () => {
     };
     const fills = () => [...document.querySelectorAll('.ts-chart__bar path')].map((bar) => bar.getAttribute('fill'));
 
-    it('fills missing points between the first and the last with zero, in time order', () => {
-        const points = densify({ ...bars, points: [{ bucket: '2026-01-01T12:00:00.000Z', error: 1 }, { bucket: '2026-01-01T12:15:00.000Z', error: 2 }, { bucket: '2026-01-01T12:05:00.000Z', error: 3 }] });
+    it('picks the smallest nice bucket that fits, as a multiple of the step', () => {
+        const fiveMinutes = 5 * 60_000;
 
-        expect(points.map((point) => new Date(point.time).toISOString().slice(11, 16))).toEqual(['12:00', '12:05', '12:10', '12:15']);
-        expect(points[2].values).toEqual({});
+        expect(bucketSize(288, fiveMinutes, 300)).toBe(fiveMinutes);
+        expect(bucketSize(288, fiveMinutes, 100)).toBe(15 * 60_000);
+        expect(bucketSize(288, fiveMinutes, 30)).toBe(60 * 60_000);
+        // Never smaller than the step, whatever the room.
+        expect(bucketSize(24, 3_600_000, 1000)).toBe(3_600_000);
+    });
+
+    it('sums neighbouring buckets, keeps totals and drops a partly covered first bucket', () => {
+        const points = ['11:50', '11:55', '12:00', '12:05', '12:10', '12:15', '12:20', '12:25'].map((time, index) => ({ bucket: `2026-01-01T${time}:00.000Z`, error: index + 1 }));
+        const merged = merge(points, 'bucket', ['error'], 15 * 60_000);
+
+        // 11:45 holds only 11:50 and 11:55 of the range: dropped.
+        expect(merged.map((point) => new Date(point.time).toISOString().slice(11, 16))).toEqual(['12:00', '12:15']);
+        expect(merged.map((point) => point.values.error)).toEqual([3 + 4 + 5, 6 + 7 + 8]);
+        expect(merged[0].end - merged[0].time).toBe(15 * 60_000);
     });
 
     it('draws a line per series in its colour', () => {

@@ -27,7 +27,7 @@ class QueueQueries
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Counters per 5-minute bucket, oldest first, with buckets in UTC. Beyond the row limit the oldest buckets are left out.
+     * Counters per stored 5-minute bucket, oldest first, with buckets in UTC; only buckets with counts. Beyond the row limit the oldest buckets are left out.
      *
      * @param  list<'queue'|'job'>  $groupBy
      * @param  array{connection?: string, queue?: string, job?: string, scope?: string}  $filters
@@ -47,16 +47,6 @@ class QueueQueries
         }
 
         return $rows->reverse()->values()->map($this->castCounters(...));
-    }
-
-    /**
-     * The start of the bucket holding the moment `$hours` ago, so a range never leaves out its oldest bucket.
-     */
-    public function rangeStart(int $hours): CarbonInterface
-    {
-        $start = now()->subHours($hours)->getTimestamp();
-
-        return now()->setTimestamp($start - $start % 300);
     }
 
     /**

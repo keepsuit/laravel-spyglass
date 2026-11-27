@@ -374,13 +374,50 @@ export function Details({ widget }: { widget: DetailsWidget }) {
     );
 }
 
-type Datum = { time: Date; series: string; value: number };
+type Datum = { time: Date; end: Date; series: string; value: number };
 
 const chartHeight = 220;
 
+const minute = 60_000;
+const niceSizes = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map((minutes) => minutes * minute);
+
+/** The smallest nice multiple of `step` ms that leaves at most `max` of `count` buckets, or the largest one. */
+export function bucketSize(count: number, step: number, max: number): number {
+    const sizes = niceSizes.filter((size) => size >= step && size % step === 0);
+    return sizes.find((size) => Math.ceil((count * step) / size) <= max) ?? sizes.at(-1) ?? step;
+}
+
 /**
- * Lines over time, or stacked bars with `style: 'bars'`. Missing points between the first and the last count as
- * zero, at the smallest step between points. The legend shows and hides lines.
+ * Points summed into buckets of `size` ms, aligned to multiples of it so they stay put between refreshes. A first
+ * bucket the range covers only in part is dropped: it would read as a dip.
+ */
+export function merge(points: Row[], x: string, keys: string[], size: number): { time: number; end: number; values: Record<string, number> }[] {
+    const buckets = new Map<number, Record<string, number>>();
+    const times = points.map((point) => new Date(String(point[x])).getTime());
+
+    points.forEach((point, index) => {
+        if (Number.isNaN(times[index])) return;
+        const start = times[index] - (times[index] % size);
+        const values = buckets.get(start) ?? Object.fromEntries(keys.map((key) => [key, 0]));
+        for (const key of keys) values[key] += Number(point[key]) || 0;
+        buckets.set(start, values);
+    });
+
+    const merged = [...buckets].sort(([a], [b]) => a - b).map(([time, values]) => ({ time, end: time + size, values }));
+    return merged.length > 1 && merged[0].time < Math.min(...times.filter((time) => !Number.isNaN(time))) ? merged.slice(1) : merged;
+}
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+
+/** The span of a bucket, as the tooltip heading. */
+function span(start: Date, end: Date): string {
+    const last = new Date(end.getTime() - 1);
+    return start.toDateString() === last.toDateString() ? `${formatShort(start.getTime())} – ${timeFormat.format(end)}` : `${formatShort(start.getTime())} – ${formatShort(end.getTime())}`;
+}
+
+/**
+ * Lines over time, or stacked bars with `style: 'bars'`. With a `step`, neighbouring buckets are summed to fit the
+ * width: a few pixels per point for lines, more for bars. The legend shows and hides lines.
  */
 export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: string[] }) {
     const box = useBox();
@@ -396,43 +433,74 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
 
     const definition = useMemo(() => {
         const shown = widget.lines.filter((line) => !hidden.includes(line.key));
-        const points = densify(widget);
-        const rows: Datum[] = points.flatMap((point) =>
-            shown.map((line) => ({ time: new Date(point.time), series: line.label, value: Number(point.values[line.key]) || 0 })),
-        );
+        const keys = shown.map((line) => line.key);
         // Colours follow the position among all lines, so hiding one leaves the others as they were.
         const color = scaleOrdinal<string, string>()
             .domain(widget.lines.map((line) => line.label))
             .range(widget.lines.map((_, index) => colour(index)));
-        const first = shown[0] ? rows.filter((row) => row.series === shown[0].label) : [];
         const series = new Set(shown.map((line) => line.label));
         const integer = (value: number) => (Number.isInteger(value) ? formatNumber(value) : '');
+        const format = (value: Date) => formatShort(value.getTime());
+        const step = (widget.step ?? 0) * 1000;
 
-        return defineChart({
-            marks: bars
-                ? [barY(rows, { x: 'time', y: 'value', z: 'series', inset: 1, radius: { end: 2 } })]
-                : [
-                      areaY(first, { x: 'time', y: 'value', fill: first.length ? color(first[0].series) : undefined, fillOpacity: 0.08 }),
-                      ...shown.map((line) => lineY(rows.filter((row) => row.series === line.label), { x: 'time', y: 'value', z: 'series', strokeWidth: 2 })),
-                  ],
-            scales: {
-                x: bars
-                    ? { scale: () => scaleBand<Date>().padding(0.15), axis: { ticks: { format: (value: Date) => formatShort(value.getTime()), size: 0 } } }
-                    : { scale: scaleUtc, axis: { ticks: { format: (value: Date) => formatShort(value.getTime()), size: 0 } } },
-                y: { scale: scaleLinear, nice: true, grid: true, axis: { ticks: { format: integer, size: 0 } } },
+        // The rows only change with the bucket size, not with every pixel of a resize.
+        const cache = new Map<number, Datum[]>();
+        const rowsFor = (width: number): Datum[] => {
+            const size = step ? bucketSize(widget.points.length, step, Math.max(4, Math.floor((width - 48) / (bars ? 8 : 3)))) : 0;
+            if (!cache.has(size)) {
+                const points = size
+                    ? merge(widget.points, widget.x, keys, size)
+                    : widget.points.map((point) => {
+                          const time = new Date(String(point[widget.x])).getTime();
+                          return { time, end: time, values: Object.fromEntries(keys.map((key) => [key, Number(point[key]) || 0])) };
+                      });
+                cache.set(
+                    size,
+                    points.flatMap((point) =>
+                        shown.map((line) => ({ time: new Date(point.time), end: new Date(point.end), series: line.label, value: point.values[line.key] ?? 0 })),
+                    ),
+                );
+            }
+            return cache.get(size)!;
+        };
+
+        const chart = defineChart({
+            chart: ({ width }) => {
+                const rows = rowsFor(width);
+                const first = shown[0] ? rows.filter((row) => row.series === shown[0].label) : [];
+
+                return {
+                    marks: bars
+                        ? [barY(rows, { x: 'time', y: 'value', z: 'series', inset: 1, radius: { end: 2 } })]
+                        : [
+                              areaY(first, { x: 'time', y: 'value', fill: first.length ? color(first[0].series) : undefined, fillOpacity: 0.08 }),
+                              ...shown.map((line) => lineY(rows.filter((row) => row.series === line.label), { x: 'time', y: 'value', z: 'series', strokeWidth: 2 })),
+                          ],
+                    scales: {
+                        x: bars
+                            ? { scale: () => scaleBand<Date>().padding(0.15), axis: { ticks: { format, size: 0 } } }
+                            : { scale: scaleUtc, axis: { ticks: { format, size: 0 } } },
+                        y: { scale: scaleLinear, nice: true, grid: true, axis: { ticks: { format: integer, size: 0 } } },
+                    },
+                };
             },
             color: { scale: color },
             theme: { muted: 'var(--muted)', grid: 'var(--line)' },
             focus: 'group-x',
+        });
+
+        return defineChart(chart, {
             tooltip: {
                 use: tooltip,
                 sort: 'color-domain',
                 // The shading under the first line is a mark of its own: its points are left out.
-                formatGroup: (group) =>
-                    [
-                        group[0]?.xValue instanceof Date ? formatDate(group[0].xValue.toISOString()) : '',
+                formatGroup: (group) => {
+                    const datum = group[0]?.datum;
+                    return [
+                        datum ? (datum.end > datum.time ? span(datum.time, datum.end) : formatDate(datum.time.toISOString())) : '',
                         ...group.filter((point) => series.has(point.groupLabel)).map((point) => `${point.groupLabel}: ${formatNumber(point.datum.value)}`),
-                    ].join('\n'),
+                    ].join('\n');
+                },
             },
         });
     }, [widget, hidden, bars]);
@@ -477,26 +545,4 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
             )}
         </section>
     );
-}
-
-export function densify(widget: SeriesWidget): { time: number; values: Row }[] {
-    const points = widget.points
-        .map((values) => ({ time: new Date(String(values[widget.x])).getTime(), values }))
-        .filter((point) => !Number.isNaN(point.time))
-        .sort((a, b) => a.time - b.time);
-
-    let step = Infinity;
-    for (let i = 1; i < points.length; i++) step = Math.min(step, points[i].time - points[i - 1].time);
-    if (!Number.isFinite(step) || step <= 0) return points;
-
-    const dense: { time: number; values: Row }[] = [];
-    for (const point of points) {
-        // ponytail: capped gap fill, a server-sent step would make this exact
-        while (dense.length && point.time - dense.at(-1)!.time > step && dense.length < 5000) {
-            dense.push({ time: dense.at(-1)!.time + step, values: {} });
-        }
-        dense.push(point);
-    }
-
-    return dense;
 }
