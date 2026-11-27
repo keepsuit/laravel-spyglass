@@ -2,7 +2,6 @@
 
 namespace Keepsuit\Spyglass\Http\Controllers;
 
-use Carbon\CarbonInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
@@ -18,9 +17,6 @@ class QueueController extends Controller
     protected const array RANGES = ['1h' => 1, '24h' => 24, '7d' => 168];
 
     public const array COUNTERS = ['processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out', 'queued' => 'Queued'];
-
-    /** Counters whose rise is bad news. */
-    public const array BETTER = ['failed' => 'down', 'released' => 'down', 'timed_out' => 'down'];
 
     protected const string MISSING = 'Already retried or removed.';
 
@@ -45,7 +41,6 @@ class QueueController extends Controller
         $aggregateFilters = ['range', 'queue', 'job', ...(config('spyglass.modules.queue.aggregate_by_scope') ? ['scope'] : [])];
         $aggregateBy = array_intersect_key($filters, array_flip(array_diff($aggregateFilters, ['range'])));
         $totals = $this->queries->totals($from, $to, [], $aggregateBy)->first() ?? [];
-        $previous = $this->previousTotals($from, $to, $aggregateBy);
 
         $failedBy = array_intersect_key($filters, array_flip(['queue', 'job', 'scope']));
         $failed = $this->queries->failedJobs($failedBy, page: $page);
@@ -53,12 +48,9 @@ class QueueController extends Controller
         $counters = array_map(fn ($key, $label) => ['key' => $key, 'label' => $label], array_keys(self::COUNTERS), self::COUNTERS);
 
         return Widget::page('Queue', [
-            ...array_map(fn (array $counter) => Widget::metric($counter['key'], $counter['label'], $totals[$counter['key']] ?? 0, $aggregateFilters,
-                previous: $previous[$counter['key']] ?? null, better: self::BETTER[$counter['key']] ?? null), $counters),
-            Widget::metric('duration_avg', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration',
-                previous: $previous === null ? null : self::averageDuration($previous), better: 'down'),
-            Widget::metric('duration_max', 'Max duration', self::maxDuration($totals), $aggregateFilters, format: 'duration',
-                previous: $previous === null ? null : self::maxDuration($previous), better: 'down'),
+            ...array_map(fn (array $counter) => Widget::metric($counter['key'], $counter['label'], $totals[$counter['key']] ?? 0, $aggregateFilters), $counters),
+            Widget::metric('duration_avg', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration'),
+            Widget::metric('duration_max', 'Max duration', self::maxDuration($totals), $aggregateFilters, format: 'duration'),
             Widget::series('throughput', 'Throughput', 'bucket', $counters, $this->queries->series($from, $to, [], $aggregateBy), $aggregateFilters),
             Widget::table('sizes', 'Queues', [
                 Widget::field('connection', 'Connection'),
@@ -92,24 +84,6 @@ class QueueController extends Controller
             Widget::filter('job', 'Job', $filters['job'] ?? null, suggestions: $this->suggestions($this->queries->totals($from, $to, ['job'])->pluck('job'))),
             Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
-    }
-
-    /**
-     * Totals over as long a period just before `$from`, or null when part of it is older than the retention.
-     *
-     * @param  array{queue?: string, job?: string, scope?: string}  $filters
-     * @return array<string, mixed>|null
-     */
-    public function previousTotals(CarbonInterface $from, CarbonInterface $to, array $filters = []): ?array
-    {
-        $start = $from->copy()->sub($from->diff($to));
-
-        if ($start->lt(now()->subDays((int) config('spyglass.modules.queue.retention.aggregates', 7)))) {
-            return null;
-        }
-
-        // The range takes in the bucket at its end, which is the first one of the current period.
-        return $this->queries->totals($start, $from->copy()->subSecond(), [], $filters)->first() ?? [];
     }
 
     /**

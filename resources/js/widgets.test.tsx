@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatRelative, formatShort, type DetailsWidget, type Field, type SeriesWidget, type TableWidget } from './lib';
-import { change, Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
+import { Details, Group, Metrics, NoticeContext, Series, Table, Value, type Notice } from './widgets';
 
 afterEach(cleanup);
 
@@ -221,19 +221,6 @@ describe('Group', () => {
         expect(screen.getByRole('heading', { level: 3, name: 'Latest failed jobs' })).toBeTruthy();
         expect(screen.getByRole('link', { name: 'View all' }).getAttribute('href')).toBe('/queue');
         expect(container.querySelectorAll('section.rounded-\\[1\\.25rem\\]')).toHaveLength(1);
-    });
-});
-
-describe('change', () => {
-    it('colours a change by the better direction, and leaves it neutral without one', () => {
-        expect(change(110, 100, 'up')).toEqual({ text: new Intl.NumberFormat(undefined, { style: 'percent', signDisplay: 'exceptZero' }).format(0.1), tone: 'ok' });
-        expect(change(110, 100, 'down')?.tone).toBe('error');
-        expect(change(90, 100, 'down')?.tone).toBe('ok');
-        expect(change(110, 100)?.tone).toBeNull();
-        expect(change(3, 0, 'down')).toEqual({ text: '+3', tone: 'error' });
-        expect(change(5, 5)).toEqual({ text: 'No change', tone: null });
-        expect(change('100+', 5)).toBeNull();
-        expect(change(5, undefined)).toBeNull();
     });
 });
 

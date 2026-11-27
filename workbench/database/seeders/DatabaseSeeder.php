@@ -89,8 +89,8 @@ class DatabaseSeeder extends Seeder
         $jobs = [['default', 'App\Jobs\SyncCatalog', 6], ['emails', 'App\Mail\InvoiceIssued', 14], ['default', 'App\Jobs\GenerateThumbnails', 3]];
         $rows = [];
 
-        // Five-minute buckets over the last two days, busier during the day: the older day is the previous period.
-        for ($b = 0; $b < 576; $b++) {
+        // Five-minute buckets over the last day, busier during the day.
+        for ($b = 0; $b < 288; $b++) {
             $bucket = $this->now->copy()->subMinutes($b * 5);
             $bucket->setTimestamp($bucket->getTimestamp() - $bucket->getTimestamp() % 300);
 
@@ -99,7 +99,7 @@ class DatabaseSeeder extends Seeder
                     continue;
                 }
 
-                $processed = (int) round($rate * ($b < 288 ? 1 : 0.85) * (0.4 + 0.6 * sin(((int) $bucket->format('G') - 6) / 24 * 2 * M_PI) ** 2) + $b * 13 % 5);
+                $processed = (int) round($rate * (0.4 + 0.6 * sin(((int) $bucket->format('G') - 6) / 24 * 2 * M_PI) ** 2) + $b * 13 % 5);
                 $failed = ($b * 31 + $rate) % 23 === 0 ? 1 + $b % 3 : 0;
 
                 $rows[] = [

@@ -204,7 +204,7 @@ it('describes the overview of the enabled modules', function () {
         ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
         ->and(array_column(apiWidget($page, 'latest_logs')['rows'], 'message'))->toBe(['Disk full'])
         ->and(apiWidget($page, 'logs')['widgets'][0])->toMatchArray(['key' => 'recorded', 'style' => 'bars'])
-        // Every task, those needing attention first.
+        // Tasks by their latest run, newest first.
         ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'archive'])
         ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
 
@@ -288,7 +288,7 @@ it('describes the queue', function () {
 
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
-    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job'], 'previous' => 0])
+    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(2)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
         ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
@@ -513,26 +513,6 @@ it('suggests known values for the free text filters', function () {
         ->and($suggestions('/spyglass/api/logs'))->toMatchArray(['scope' => []]);
 });
 
-it('compares queue counters with the period just before, without counting the bucket between them twice', function () {
-    Date::setTestNow('2026-01-01 12:04:00');
-    // The last hour starts with the 11:00 bucket: the hour before ends just before it.
-    DB::table(QueueModule::AGGREGATES)->insert([
-        ['bucket' => '2026-01-01 10:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 2, 'failed' => 3, 'duration_sum' => 500, 'duration_max' => 400],
-        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'processed' => 4, 'failed' => 1, 'duration_sum' => 100, 'duration_max' => 30],
-    ]);
-
-    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
-
-    expect(apiWidget($page, 'processed'))->toMatchArray(['value' => 4, 'previous' => 2])
-        ->and(apiWidget($page, 'processed'))->not->toHaveKey('better')
-        ->and(apiWidget($page, 'failed'))->toMatchArray(['value' => 1, 'previous' => 3, 'better' => 'down'])
-        ->and(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 20, 'previous' => 100, 'format' => 'duration'])
-        ->and(apiWidget($page, 'duration_max'))->toMatchArray(['value' => 30, 'previous' => 400]);
-
-    // The week before is past the retention of the aggregates.
-    expect($this->getJson('/spyglass/api/queue?range=7d')->json())->not->toHaveKey('widgets.0.previous');
-});
-
 it('counts recorded exceptions and log entries per hour, with every hour present', function () {
     Date::setTestNow('2026-03-01 12:30:00');
     apiLogEntry('error', 'Disk full', at: '2026-03-01 12:10:00');
@@ -571,4 +551,18 @@ it('counts entries per hour when the application uses immutable dates', function
     } finally {
         Date::useDefault();
     }
+});
+
+it('shows the average duration per attempt and the max duration of the queue', function () {
+    Date::setTestNow('2026-01-01 12:04:00');
+    DB::table(QueueModule::AGGREGATES)->insert([
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'queued' => 9, 'processed' => 3, 'failed' => 1, 'duration_sum' => 400, 'duration_max' => 250],
+    ]);
+
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
+
+    // Queued jobs have no duration: 400 ms over 4 attempts.
+    expect(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 100, 'format' => 'duration'])
+        ->and(apiWidget($page, 'duration_max')['value'])->toBe(250)
+        ->and(apiWidget($this->getJson('/spyglass/api/queue?range=1h&job=Missing')->json(), 'duration_avg')['value'])->toBeNull();
 });

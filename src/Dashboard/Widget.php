@@ -36,8 +36,7 @@ final class Widget
 
     /**
      * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value. `$format`
-     * `duration` reads the value as milliseconds. `$previous` is the value over the previous period, and
-     * `$better` (`up` or `down`) the direction that colours its change as good.
+     * `duration` reads the value as milliseconds.
      *
      * @param  list<string>  $filters
      * @return array<string, mixed>
@@ -50,8 +49,6 @@ final class Widget
         ?string $link = null,
         ?string $tone = null,
         ?string $format = null,
-        int|float|null $previous = null,
-        ?string $better = null,
     ): array {
         return [
             'type' => 'metric',
@@ -59,7 +56,7 @@ final class Widget
             'label' => $label,
             'value' => $value,
             'filters' => $filters,
-            ...array_filter(compact('link', 'tone', 'format', 'previous', 'better'), fn ($option) => $option !== null),
+            ...array_filter(compact('link', 'tone', 'format'), fn ($option) => $option !== null),
         ];
     }
 

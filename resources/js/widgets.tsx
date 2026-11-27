@@ -194,30 +194,12 @@ export function Group({ widget, children }: { widget: GroupWidget; children: Rea
     );
 }
 
-const deltaTones = { ok: 'text-ok', error: 'text-error' };
-const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
-const signed = new Intl.NumberFormat(undefined, { signDisplay: 'exceptZero' });
-
-/** Change against the previous period: a percentage, or the difference when there was nothing before. */
-export function change(value: unknown, previous?: number, better?: 'up' | 'down'): { text: string; tone: 'ok' | 'error' | null } | null {
-    if (typeof value !== 'number' || previous === undefined) return null;
-
-    const diff = value - previous;
-    if (diff === 0) return { text: 'No change', tone: null };
-
-    return {
-        text: previous === 0 ? signed.format(diff) : percent.format(diff / previous),
-        tone: better ? ((diff > 0) === (better === 'up') ? 'ok' : 'error') : null,
-    };
-}
-
 /** Consecutive metrics share one row. A linked metric opens its page. */
 export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored: (filters: string[]) => string[] }) {
     return (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))]">
             {metrics.map((metric) => {
                 const notes = ignored(metric.filters);
-                const delta = change(metric.value, metric.previous, metric.better);
                 const body = (
                     <>
                         <div className="flex items-start gap-2 text-muted">
@@ -231,12 +213,6 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
                         >
                             {metric.value === null ? '–' : metric.format === 'duration' && typeof metric.value === 'number' ? formatDuration(metric.value) : formatNumber(metric.value)}
                         </div>
-                        {delta && (
-                            <div className="mt-2 text-xs">
-                                <div className={`font-medium tabular-nums ${delta.tone ? deltaTones[delta.tone] : ''}`}>{delta.text}</div>
-                                <div className="text-muted">vs previous period</div>
-                            </div>
-                        )}
                         {notes.length > 0 && <div className="mt-2 text-xs text-muted">Not filtered by {notes.join(', ')}</div>}
                     </>
                 );

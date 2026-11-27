@@ -24,9 +24,6 @@ class OverviewController extends Controller
      */
     protected const int COUNTED = 100;
 
-    /** Tasks listed, so an application with many tasks keeps a short card. */
-    protected const int TASKS = 10;
-
     /**
      * @return array<string, mixed>
      */
@@ -59,11 +56,10 @@ class OverviewController extends Controller
             $queries = app(QueueQueries::class);
             $from = $queries->rangeStart(24);
             $totals = $queries->totals($from, now(), [])->first() ?? [];
-            $previous = app(QueueController::class)->previousTotals($from, now());
             $failed = $queries->failedJobs(perPage: self::LISTED);
 
             $metrics[] = Widget::metric('failed_jobs_total', 'Failed jobs', $failed->total(), link: 'queue', tone: $failed->total() > 0 ? 'error' : 'ok');
-            $metrics[] = Widget::metric('processed_jobs', 'Jobs processed in 24h', $totals['processed'] ?? 0, link: 'queue', previous: $previous['processed'] ?? null);
+            $metrics[] = Widget::metric('processed_jobs', 'Jobs processed in 24h', $totals['processed'] ?? 0, link: 'queue');
             $groups['queue'] = Widget::group('queue', 'Queue', [
                 Widget::series('throughput', 'Throughput in 24h', 'bucket', [
                     ['key' => 'processed', 'label' => QueueController::COUNTERS['processed']],
@@ -81,13 +77,12 @@ class OverviewController extends Controller
         if (isset($modules['schedule'])) {
             $tasks = app(ScheduleQueries::class)->tasks()
                 ->map(ScheduleController::flatten(...))
-                ->reject(fn (array $task) => $task['stale'])
-                ->map(fn (array $task) => [...$task, 'attention' => $task['missed'] || in_array($task['last_status'], ['failed', 'interrupted'], true)]);
-            $attention = $tasks->where('attention', true)->count();
+                ->reject(fn (array $task) => $task['stale']);
+            $attention = $tasks->filter(fn (array $task) => $task['missed'] || in_array($task['last_status'], ['failed', 'interrupted'], true))->count();
 
             $metrics[] = Widget::metric('tasks_attention', 'Tasks needing attention', $attention, link: 'schedule', tone: $attention === 0 ? 'ok' : 'warning');
             $groups['schedule'] = Widget::group('schedule', 'Schedule', [
-                Widget::table('tasks', 'Tasks', [
+                Widget::table('tasks', 'Latest runs', [
                     Widget::field('label', 'Task'),
                     Widget::field('last_status', 'Last run', 'status', ScheduleController::TONES),
                     Widget::field('recent', 'Recent runs', 'runs', ScheduleController::TONES),
@@ -95,7 +90,7 @@ class OverviewController extends Controller
                     Widget::field('last_duration_ms', 'Duration', 'duration'),
                     Widget::field('next_run', 'Next run', 'datetime'),
                     Widget::field('missed', 'Missed', 'boolean'),
-                ], $tasks->sortBy(fn (array $task) => $task['attention'] ? 0 : 1)->take(self::TASKS)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
+                ], $tasks->sortByDesc(fn (array $task) => $task['last_started_at'] ?? '')->take(self::LISTED)->values(), link: 'schedule/{key}', empty: 'No scheduled tasks yet.'),
             ], more: 'schedule');
         }
 

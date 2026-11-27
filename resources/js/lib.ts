@@ -24,8 +24,6 @@ export type MetricWidget = {
     link?: string;
     tone?: Tone;
     format?: 'duration';
-    previous?: number;
-    better?: 'up' | 'down';
 };
 export type TableWidget = {
     type: 'table';
