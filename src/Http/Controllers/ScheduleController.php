@@ -60,7 +60,6 @@ class ScheduleController extends Controller
                 Widget::field('command', 'Command'),
                 Widget::field('description', 'Description'),
                 Widget::field('schedule_lines', 'Schedule', 'lines'),
-                Widget::field('environments', 'Environments', 'json'),
                 Widget::field('without_overlapping', 'Without overlapping', 'boolean'),
                 Widget::field('next_run', 'Next run', 'datetime'),
                 Widget::field('missed', 'Missed', 'boolean'),
