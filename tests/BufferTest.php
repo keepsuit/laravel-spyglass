@@ -56,7 +56,7 @@ it('increments with the MySQL upsert alias syntax', function () {
 })->skip(fn () => ! in_array(DB::getDriverName(), ['mysql', 'mariadb']), 'MySQL only');
 
 it('captures scope and context when the entry is created', function () {
-    config()->set('spyglass.context.keys', ['tenant_id', 'secret']);
+    config()->set('spyglass.context', ['tenant_id', 'secret']);
     Spyglass::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? 'tenant:'.$context['tenant_id'] : null);
 
     Context::add('tenant_id', 'acme');
@@ -77,7 +77,7 @@ it('captures scope and context when the entry is created', function () {
 });
 
 it('stores entries without scope when the scope resolver throws', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     Context::add('tenant_id', 'acme');
     Spyglass::resolveScopeUsing(fn () => throw new RuntimeException('Resolver failed'));
 

@@ -30,7 +30,7 @@ it('prunes in batches of 1000 rows', function () {
 });
 
 it('does not prune disabled modules', function () {
-    config()->set('spyglass.modules.test.enabled', false);
+    config()->set(moduleKey('test').'.enabled', false);
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
@@ -43,7 +43,7 @@ it('schedules the prune command daily', function () {
 });
 
 it('can disable the prune schedule', function () {
-    expect(pruneEvents($this->bootApplication(['spyglass.prune.schedule' => false])))->toBeEmpty();
+    expect(pruneEvents($this->bootApplication(['spyglass.schedule_prune' => false])))->toBeEmpty();
 });
 
 it('compares retention in UTC, whatever the application timezone', function () {

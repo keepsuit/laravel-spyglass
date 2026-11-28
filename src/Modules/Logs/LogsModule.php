@@ -15,12 +15,17 @@ class LogsModule extends Module
 {
     public const string ENTRIES = Sources::ENTRIES;
 
+    public static function name(): string
+    {
+        return 'logs';
+    }
+
     public function boot(): void
     {
         $handler = null;
 
         Log::extend('spyglass', function () use (&$handler) {
-            return new Logger('spyglass', [$handler = new LogHandler(config('spyglass.modules.logs.level', 'warning'))]);
+            return new Logger('spyglass', [$handler = new LogHandler(LogsModule::config('level', 'warning'))]);
         });
 
         // A worker or an Octane server runs many lifecycles in one process. Sync jobs belong to the dispatching one.

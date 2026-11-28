@@ -101,7 +101,7 @@ it('reports a task missed once its due run is older than the grace period', func
     expect(scheduledTask('report')['missed'])->toBeTrue();
 
     Date::setTestNow('2026-01-01 12:00:30');
-    config()->set('spyglass.modules.schedule.missed_after', 0);
+    config()->set(moduleKey('schedule').'.missed_after', 0);
     expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
@@ -263,7 +263,7 @@ it('shows a run that never finished as interrupted after the threshold', functio
 
     expect(scheduledTask('report')['last_run']['status'])->toBe('running');
 
-    config()->set('spyglass.modules.schedule.interrupted_after', 3600);
+    config()->set(moduleKey('schedule').'.interrupted_after', 3600);
     expect(scheduledTask('report')['last_run']['status'])->toBe('interrupted');
 });
 

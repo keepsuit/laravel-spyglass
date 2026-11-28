@@ -3,7 +3,6 @@
 namespace Keepsuit\Spyglass\Tests\Fixtures;
 
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
-use Keepsuit\Spyglass\Spyglass;
 
 trait WithExceptionsModule
 {
@@ -11,7 +10,7 @@ trait WithExceptionsModule
     {
         parent::defineEnvironment($app);
 
-        Spyglass::$modules['exceptions'] = ExceptionsModule::class;
+        $this->enableModule($app, ExceptionsModule::class);
     }
 
     protected function defineDatabaseMigrations(): void

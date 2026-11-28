@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
+use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use stdClass;
 use Symfony\Component\Console\Input\ArgvInput;
 use Throwable;
@@ -243,7 +244,7 @@ final class Sources
             return '';
         }
 
-        $allowed = (array) config('spyglass.modules.exceptions.query_allowlist', []);
+        $allowed = (array) ExceptionsModule::config('query_allowlist', []);
 
         return '?'.collect(explode('&', $query))
             ->map(function (string $pair) use ($allowed) {

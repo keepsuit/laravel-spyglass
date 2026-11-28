@@ -698,7 +698,7 @@ it('records runs of the same task at several times under one key', function () {
 });
 
 it('keeps only the newest runs of each task by outcome', function () {
-    config()->set(['spyglass.modules.schedule.retention.successful_runs_per_task' => 2, 'spyglass.modules.schedule.retention.failed_runs_per_task' => 3]);
+    config()->set([moduleKey('schedule').'.keep_per_task.successful' => 2, moduleKey('schedule').'.keep_per_task.failed' => 3]);
 
     foreach (['a', 'b'] as $task) {
         foreach (range(1, 8) as $i) {

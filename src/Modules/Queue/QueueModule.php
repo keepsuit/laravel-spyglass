@@ -39,6 +39,11 @@ class QueueModule extends Module
 
     public const string FAILED_JOBS = 'spyglass_queue_failed_jobs';
 
+    public static function name(): string
+    {
+        return 'queue';
+    }
+
     /**
      * Attempts in progress, until counted. Keyed by the job instance, which is the same object
      * in every event of an attempt, so nested sync jobs and a missed end event cannot leak state.
@@ -69,7 +74,7 @@ class QueueModule extends Module
                 $this->queueName($event->connectionName, $event->queue),
                 JobName::from($payload),
                 'queued',
-                config('spyglass.modules.queue.aggregate_by_scope') ? Spyglass::captureContext()['scope'] : null,
+                static::config('aggregate_by_scope') ? Spyglass::captureContext()['scope'] : null,
             );
         });
 
@@ -277,7 +282,7 @@ class QueueModule extends Module
         // Clipped first: a scope that clips to '' would count in the total twice.
         $scope = Text::clip($scope ?? '', 191);
 
-        if ($scope !== '' && config('spyglass.modules.queue.aggregate_by_scope')) {
+        if ($scope !== '' && static::config('aggregate_by_scope')) {
             Spyglass::upsert(self::AGGREGATES, [...$key, 'scope' => $scope], increment: $increment, max: ['duration_max' => $duration ?? 0]);
         }
     }

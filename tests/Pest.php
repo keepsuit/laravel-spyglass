@@ -7,6 +7,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
 use Keepsuit\Spyglass\Support\Sources;
+use Keepsuit\Spyglass\Tests\Fixtures\TestModule;
 use Keepsuit\Spyglass\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -18,6 +19,20 @@ function pruneEvents(?Application $app = null): array
         ($app ?? app())->make(Schedule::class)->events(),
         fn (Event $event) => str_contains($event->command ?? '', 'spyglass:prune'),
     ));
+}
+
+/**
+ * The `spyglass.modules` config key of the module with this name.
+ */
+function moduleKey(string $name): string
+{
+    foreach ([...array_keys((require __DIR__.'/../config/spyglass.php')['modules']), TestModule::class] as $class) {
+        if ($class::name() === $name) {
+            return 'spyglass.modules.'.$class;
+        }
+    }
+
+    throw new InvalidArgumentException("Unknown module [{$name}].");
 }
 
 // Not `hasListeners()`: framework wildcard listeners make it always true.

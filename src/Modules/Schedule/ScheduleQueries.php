@@ -60,7 +60,7 @@ class ScheduleQueries
             ->values();
 
         // No more than the retention keeps of each outcome, or pruned successes would leave only failures.
-        $recent = min(self::RECENT_RUNS, ...array_map(fn (string $kept) => max(2, (int) config("spyglass.modules.schedule.retention.{$kept}", self::RECENT_RUNS)), ['successful_runs_per_task', 'failed_runs_per_task']));
+        $recent = min(self::RECENT_RUNS, ...array_map(fn (string $kept) => max(2, (int) ScheduleModule::config("keep_per_task.{$kept}", self::RECENT_RUNS)), ['successful', 'failed']));
         $lastRuns = $this->lastRuns($tasks->pluck('key')->all(), $recent);
         $newest = is_string($tasks->first()?->newest) ? $this->date($tasks->first()->newest) : Date::now();
 
@@ -184,7 +184,7 @@ class ScheduleQueries
         }
 
         return ! $withoutOverlapping && $previous['status'] === 'running'
-            && $this->date($previous['started_at'])->gt($started->copy()->subSeconds((int) config('spyglass.modules.schedule.interrupted_after', 86400)));
+            && $this->date($previous['started_at'])->gt($started->copy()->subSeconds((int) ScheduleModule::config('interrupted_after', 86400)));
     }
 
     /**
@@ -234,7 +234,7 @@ class ScheduleQueries
      */
     protected function status(array $run, bool $superseded): string
     {
-        $interruptedAfter = (int) config('spyglass.modules.schedule.interrupted_after', 86400);
+        $interruptedAfter = (int) ScheduleModule::config('interrupted_after', 86400);
 
         return $run['status'] === 'running'
             && ($superseded || $this->date($run['started_at'])->lt(Date::now()->subSeconds($interruptedAfter)))
@@ -292,7 +292,7 @@ class ScheduleQueries
      */
     protected function missed(array $task): bool
     {
-        $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
+        $due = Date::now()->subSeconds((int) ScheduleModule::config('missed_after', 90));
         $slot = null;
 
         // The latest due slot among the schedules.

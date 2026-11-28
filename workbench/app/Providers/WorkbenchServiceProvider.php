@@ -12,7 +12,7 @@ class WorkbenchServiceProvider extends ServiceProvider
     {
         Gate::define('viewSpyglass', fn ($user = null) => true);
 
-        config(['spyglass.context.keys' => ['tenant_id']]);
+        config(['spyglass.context' => ['tenant_id']]);
 
         Spyglass::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? "tenant:{$context['tenant_id']}" : null);
         Spyglass::resolveScopeLabelsUsing(fn (array $scopes) => array_combine($scopes, array_map(

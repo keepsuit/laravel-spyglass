@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
 use Keepsuit\Spyglass\Modules\Queue\Outcome;
+use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
 use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Support\Buckets;
@@ -43,7 +44,7 @@ class QueueController extends Controller
         $from = Buckets::start(self::RANGES[$range], self::STEPS[$range]);
 
         // Aggregates are kept per scope only when configured: otherwise they ignore the scope filter.
-        $aggregateFilters = ['range', 'queue', 'job', ...(config('spyglass.modules.queue.aggregate_by_scope') ? ['scope'] : [])];
+        $aggregateFilters = ['range', 'queue', 'job', ...(QueueModule::config('aggregate_by_scope') ? ['scope'] : [])];
         $aggregateBy = array_intersect_key($filters, array_flip(array_diff($aggregateFilters, ['range'])));
         $totals = $this->queries->totals($from, $to, [], $aggregateBy)->first() ?? [];
 

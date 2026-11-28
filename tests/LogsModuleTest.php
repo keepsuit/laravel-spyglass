@@ -27,7 +27,7 @@ function logEntries(): array
 }
 
 it('stores records at or above the configured level', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? "tenant:{$context['tenant_id']}" : null);
     Context::add('tenant_id', 'acme');
     $this->travelTo('2026-03-01 10:00:00');
@@ -51,7 +51,7 @@ it('stores records at or above the configured level', function () {
 });
 
 it('uses the configured level', function () {
-    config()->set('spyglass.modules.logs.level', 'error');
+    config()->set(moduleKey('logs').'.level', 'error');
 
     Log::warning('Not stored');
     Log::error('Stored');
@@ -186,7 +186,7 @@ it('throttles in the process before asking the cache', function () {
 });
 
 it('throttles each scope on its own', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
 
     foreach (['acme', 'acme', 'other'] as $tenant) {
@@ -276,7 +276,7 @@ it('keeps the spyglass channel of a stack silent when Spyglass or the logs modul
         ->and($app['log']->channel('test')->getLogger()->getHandlers()[0]->hasErrorThatContains('Still logged'))->toBeTrue();
 })->with([
     'Spyglass disabled' => [['spyglass.enabled' => false]],
-    'logs module disabled' => [['spyglass.modules.logs.enabled' => false]],
+    'logs module disabled' => [[moduleKey('logs').'.enabled' => false]],
 ]);
 
 it('counts every source of a message, beyond the throttled entries', function () {

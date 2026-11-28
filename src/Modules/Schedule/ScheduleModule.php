@@ -60,6 +60,11 @@ class ScheduleModule extends Module
     /** Sub-minute tasks are skipped or run every few seconds: one write per task within this many seconds. */
     protected const int TASK_WRITE_INTERVAL = 30;
 
+    public static function name(): string
+    {
+        return 'schedule';
+    }
+
     /**
      * Runs started by this process, by run id. Not by task: Laravel reuses the task object for every
      * execution of a sub-minute task.
@@ -199,13 +204,13 @@ class ScheduleModule extends Module
         $db = Spyglass::connection();
         $deleted = 0;
         $keep = [
-            'successful_runs_per_task' => fn (Builder $query) => $query->where('status', 'success'),
-            'failed_runs_per_task' => fn (Builder $query) => $query->where('status', '!=', 'success'),
+            'successful' => fn (Builder $query) => $query->where('status', 'success'),
+            'failed' => fn (Builder $query) => $query->where('status', '!=', 'success'),
         ];
 
         foreach ($db->table(self::RUNS)->distinct()->pluck('task') as $task) {
             foreach ($keep as $config => $outcome) {
-                $limit = config("spyglass.modules.schedule.retention.{$config}");
+                $limit = static::config("keep_per_task.{$config}");
 
                 if (! is_numeric($limit)) {
                     continue;
@@ -236,7 +241,7 @@ class ScheduleModule extends Module
      */
     public static function identify(Task $task): array
     {
-        $name = static::name($task);
+        $name = static::taskName($task);
         $job = static::job($task);
         $arguments = is_object($job) ? static::arguments($job) : [];
         $artisan = Application::formatCommandString('');
@@ -357,7 +362,7 @@ class ScheduleModule extends Module
         return $task->timezone instanceof DateTimeZone ? $task->timezone->getName() : ($task->timezone ?: date_default_timezone_get());
     }
 
-    protected static function name(Task $task): string
+    protected static function taskName(Task $task): string
     {
         return match (true) {
             // Normalized: the command embeds the absolute PHP binary, which differs between hosts and upgrades.

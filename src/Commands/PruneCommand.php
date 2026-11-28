@@ -13,10 +13,10 @@ class PruneCommand extends Command
 
     public function handle(Spyglass $spyglass): int
     {
-        foreach ($spyglass->modules() as $name => $module) {
+        foreach ($spyglass->modules() as $module) {
             foreach ($module->prunable() as $table => $rule) {
                 ['column' => $column, 'retention' => $retention] = $rule;
-                $days = config("spyglass.modules.{$name}.retention.{$retention}");
+                $days = $module::config("retention.{$retention}");
 
                 if (! is_numeric($days)) {
                     continue;
