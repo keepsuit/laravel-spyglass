@@ -2,6 +2,7 @@
 
 namespace Keepsuit\Spyglass\Support;
 
+use Laravel\SerializableClosure\Support\ClosureStream;
 use Throwable;
 
 /**
@@ -41,21 +42,37 @@ final class ExceptionFingerprint
      */
     protected static function frame(Throwable $exception): array
     {
-        $base = rtrim(str_replace('\\', '/', base_path()), '/').'/';
         $trace = $exception->getTrace();
 
         // Each trace frame names the function called at its line, so the one containing a line is the next frame's.
         foreach ([['file' => $exception->getFile(), 'line' => $exception->getLine()], ...$trace] as $i => $frame) {
             $file = str_replace('\\', '/', $frame['file'] ?? '');
 
-            if (str_starts_with($file, $base) && ! str_starts_with($file, $base.'vendor/')) {
-                return [substr($file, strlen($base)), $frame['line'] ?? 0, self::function($trace[$i] ?? null)];
+            // A queued closure runs from its code alone, whose line 2 is the closure's first line.
+            if (str_starts_with($file, ClosureStream::STREAM_PROTO.'://') && ($closure = app(Sources::class)->closure($exception)) !== null) {
+                return [$closure[0], $closure[1] + ($frame['line'] ?? 2) - 2, self::function($trace[$i] ?? null)];
+            }
+
+            if (($path = self::applicationPath($file)) !== null) {
+                return [$path, $frame['line'] ?? 0, self::function($trace[$i] ?? null)];
             }
         }
 
+        $base = rtrim(str_replace('\\', '/', base_path()), '/').'/';
         $file = str_replace('\\', '/', $exception->getFile());
 
         return [str_starts_with($file, $base) ? substr($file, strlen($base)) : $file, $exception->getLine(), self::function($trace[0] ?? null)];
+    }
+
+    /**
+     * `$file` relative to the base path, or null outside the application or in `vendor/`.
+     */
+    public static function applicationPath(string $file): ?string
+    {
+        $base = rtrim(str_replace('\\', '/', base_path()), '/').'/';
+        $file = str_replace('\\', '/', $file);
+
+        return str_starts_with($file, $base) && ! str_starts_with($file, $base.'vendor/') ? substr($file, strlen($base)) : null;
     }
 
     /**
