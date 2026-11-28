@@ -51,7 +51,9 @@ Spyglass never stores job payloads, query bindings or the driver message of quer
 - A manual `Log::error(..., ['exception' => $e])` after `report($e)` is skipped as already recorded.
 - With the schedule module disabled, exceptions and logs of scheduled tasks have the `schedule:run` command as their source, not the task.
 - The `source_id` of entries from a successful run of a sub-minute task points to no run, since those runs are not stored.
-- With a `database` cache store, occurrences and log entries are throttled per process only, so several processes can store the same one in a minute: a cache query inside an open transaction could abort it on PostgreSQL.
+- With a `database` cache store, occurrences and log entries are throttled per process only, so several processes can store the same one in a minute: a cache query inside an open transaction could abort it on PostgreSQL. With stancl/tenancy this is often the store in use: see [Storage and cache](#storage-and-cache).
+- With a scope filter, the exception list and page take counts, last seen and message from the occurrences stored in that scope. Occurrences are throttled per exception and scope and pruned after their retention, so these counts are approximate (a lower bound). The sources of an exception are counted across scopes: its page shows them unfiltered.
+- Resolving or reopening an exception applies to every scope, even from a page filtered by scope: the status is that of the exception as a whole.
 - An exception thrown in the `catch()` callback of a queued closure is located in the closure's file, at a wrong line.
 - Exceptions of queued closures run synchronously (`sync` driver, `dispatchSync()`) are located at the `dispatch()` call, not at the throw.
 - Closures run by `Concurrency::run()` with the `process` driver are not supported: their exceptions are located in `artisan`.
@@ -89,11 +91,14 @@ The dashboard is served at `/spyglass` (`SPYGLASS_PATH`, optionally on `SPYGLASS
 
 ### Logs
 
-Spyglass declares a `spyglass` log channel. To record logs, add it to the application's stack. With the default `config/logging.php`, set it in `.env`:
+Spyglass declares a `spyglass` log channel. Logs are recorded only when that channel is in the stack the application logs to. With the default `config/logging.php`, set both in `.env`:
 
 ```dotenv
-LOG_STACK=single,spyglass
+LOG_CHANNEL=stack
+LOG_STACK=stderr,spyglass
 ```
+
+`LOG_CHANNEL` must be `stack`: with another channel, for example `LOG_CHANNEL=stderr`, `LOG_STACK` is ignored and nothing reaches Spyglass. Keep in `LOG_STACK` the channels the application already writes to (`stderr` here, `single` in the default configuration).
 
 Or list it in the stack channels of a customised `config/logging.php`:
 
@@ -110,6 +115,8 @@ Modules are listed in `spyglass.modules`, keyed by class, in dashboard order. Ea
 Entries are written through a copy of the storage connection registered as `spyglass`, so they stay outside the application's transactions: a rollback or a deadlock on either side does not affect the other. On SQLite, which allows a single writer, the connection itself is used. The connection and cache store names are resolved once at boot, so runtime switches of the defaults (for example per-tenant databases) do not affect them.
 
 The cache throttles repeated exceptions and log messages across processes and holds queue sizes for a few seconds. Set `SPYGLASS_CACHE_STORE=array` to keep it per process. `SPYGLASS_CACHE_STORE=null` does not disable it: `env()` reads it as `null`, which selects the application's default store.
+
+With stancl/tenancy, set `SPYGLASS_CACHE_STORE` to a store that its `CacheTenancyBootstrapper` does not separate per tenant. In practice this is often the `database` store on the central connection, with which the throttle holds per process only (see [Known limitations](#known-limitations)).
 
 ### Pruning
 

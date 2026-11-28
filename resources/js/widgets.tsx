@@ -363,6 +363,7 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                     {widget.more && <ViewAll to={widget.more} />}
                 </div>
             </Heading>
+            {widget.note && <Note text={widget.note} />}
             {rows.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">{widget.empty ?? (filtered ? 'Nothing matches these filters.' : 'Nothing recorded yet.')}</p>
             ) : (
@@ -481,6 +482,10 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
     );
 }
 
+function Note({ text }: { text: string }) {
+    return <p className="-mt-2 px-4 pb-2 text-xs text-muted">{text}</p>;
+}
+
 const alignRight = (field: Field) => field.type === 'number' || field.type === 'duration';
 
 export function Details({ widget }: { widget: DetailsWidget }) {
@@ -490,6 +495,7 @@ export function Details({ widget }: { widget: DetailsWidget }) {
             <Heading label={widget.label} ignored={[]}>
                 {widget.actions.length > 0 && <Actions actions={widget.actions} />}
             </Heading>
+            {widget.note && <Note text={widget.note} />}
             <dl className="grid gap-x-8 gap-y-3 border-t border-line px-4 py-4 sm:grid-cols-[minmax(9rem,max-content)_1fr]">
                 {widget.items.map((item) => (
                     <div key={item.key} className="contents">
@@ -669,7 +675,7 @@ export function Series({ widget, ignored }: { widget: SeriesWidget; ignored: str
                     })}
                 </ul>
             </Heading>
-            {widget.note && <p className="-mt-2 px-4 pb-2 text-xs text-muted">{widget.note}</p>}
+            {widget.note && <Note text={widget.note} />}
             {widget.points.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">Nothing recorded in this range.</p>
             ) : (

@@ -95,6 +95,13 @@ describe('Table', () => {
         expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false);
     });
 
+    it('shows its note and keeps the query of its row link', () => {
+        wrap(<Table widget={{ ...table, link: 'queue/failed-jobs/{uuid}?scope=tenant%3Aa', note: 'Approximate.' }} ignored={[]} filtered={false} page={null} />);
+
+        expect(screen.getByText('Approximate.')).toBeTruthy();
+        expect(screen.getByRole('link', { name: 'App\\Jobs\\Sync' }).getAttribute('href')).toBe('/queue/failed-jobs/a%2Fb?scope=tenant%3Aa');
+    });
+
     it('labels the cells after the first and marks the empty ones, for the layout of a phone', () => {
         wrap(<Table widget={{ ...table, rows: [{ ...table.rows[0], failed_at: null }] }} ignored={[]} filtered={false} page={null} />);
 
@@ -231,10 +238,12 @@ describe('Details', () => {
             items: [{ ...field('number'), label: 'Count', value: 3 }],
             actions: [{ key: 'resolve', label: 'Resolve', url: 'exceptions/abc/resolve' }],
             filters: [],
+            note: 'Applies to every scope.',
         };
 
         wrap(<Details widget={widget} />);
 
+        expect(screen.getByText('Applies to every scope.')).toBeTruthy();
         expect(screen.getByText('Count')).toBeTruthy();
         expect(screen.getByText('3')).toBeTruthy();
         expect(screen.getByRole('button', { name: 'Resolve' })).toBeTruthy();

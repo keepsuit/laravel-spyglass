@@ -42,7 +42,7 @@ return new class extends Migration
             $table->index(['kind', 'signature', 'recorded_at']);
             $table->index(['kind', 'level', 'recorded_at']);
             $table->index(['kind', 'scope', 'recorded_at']);
-            $table->index(['kind', 'scope', 'signature']);
+            $table->index(['kind', 'scope', 'signature', 'recorded_at']);
             $table->index(['source_type', 'source_id']);
         });
 

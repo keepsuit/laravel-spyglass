@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
 use Keepsuit\Spyglass\Facades\Spyglass as SpyglassFacade;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionQueries;
@@ -47,14 +48,6 @@ class ThrowingBeforeRouting
 function sameSiteException(string $message = 'Boom'): RuntimeException
 {
     return new RuntimeException($message);
-}
-
-/**
- * Datetimes to the second: drivers differ in how they return the milliseconds.
- */
-function toSeconds(object $row): array
-{
-    return array_map(fn ($value) => is_string($value) && preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/', $value) ? substr($value, 0, 19) : $value, (array) $row);
 }
 
 function exceptionGroup(): array
@@ -136,6 +129,23 @@ it('registers on a handler bound after boot, including decorators', function (Cl
     'Collision decorator' => fn () => new CollisionHandler(app(), new Handler(app())),
     'decorator forwarding through __call' => fn () => new ForwardingExceptionHandler(new Handler(app())),
 ]);
+
+it('lets the application fake exceptions after turning off exception handling', function (bool $except) {
+    $except ? $this->handleExceptions([ExceptionsModuleTestException::class]) : $this->withoutExceptionHandling();
+    Exceptions::fake();
+
+    report(sameSiteException());
+
+    Exceptions::assertReported(RuntimeException::class);
+})->with(['withoutExceptionHandling' => false, 'handleExceptions' => true]);
+
+it('still records through a fake that forwards to the application handler', function () {
+    Exceptions::fake(ExceptionsModuleTestException::class);
+
+    reportAndFlush(sameSiteException());
+
+    expect(exceptionGroup()['count'])->toBe(1);
+});
 
 it('counts the same exception instance once', function () {
     $e = sameSiteException();

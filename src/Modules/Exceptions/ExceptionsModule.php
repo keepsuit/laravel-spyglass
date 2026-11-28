@@ -2,6 +2,8 @@
 
 namespace Keepsuit\Spyglass\Modules\Exceptions;
 
+use BadMethodCallException;
+use Error;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\QueryException;
@@ -78,10 +80,16 @@ class ExceptionsModule extends Module
             return;
         }
 
+        try {
+            $handler->reportable(function (Throwable $e): void {
+                $this->record($e);
+            });
+        } catch (Error|BadMethodCallException) {
+            // `__call()` can forward to a handler without `reportable()`, as `Exceptions::fake()` after `withoutExceptionHandling()`.
+            return;
+        }
+
         $this->handlers[$handler] = true;
-        $handler->reportable(function (Throwable $e): void {
-            $this->record($e);
-        });
     }
 
     protected function record(Throwable $e): void
