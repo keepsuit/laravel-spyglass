@@ -138,7 +138,8 @@ it('publishes the schedule on every run, keeping when each task was first seen',
         'environments' => '["production"]',
         'last_skipped_at' => null,
     ])
-        ->and(json_decode(scheduleTask($task)->schedules, true))->toBe([['expression' => '* * * * *', 'timezone' => 'UTC', 'repeat_seconds' => 10]])
+        // MySQL reorders the keys of a JSON object.
+        ->and(json_decode(scheduleTask($task)->schedules, true))->toEqual([['expression' => '* * * * *', 'timezone' => 'UTC', 'repeat_seconds' => 10]])
         ->and((bool) scheduleTask($task)->without_overlapping)->toBeFalse()
         ->and(substr(scheduleTask($task)->first_seen_at, 11, 5))->toBe('12:00')
         ->and(substr(scheduleTask($task)->last_seen_at, 11, 5))->toBe('12:01')
@@ -671,7 +672,7 @@ it('publishes a task registered at several times as one row', function () {
     publishSchedule();
 
     expect(DB::table(ScheduleModule::TASKS)->where('type', 'job')->count())->toBe(2)
-        ->and(json_decode(scheduleTask($first)->schedules, true))->toBe([
+        ->and(json_decode(scheduleTask($first)->schedules, true))->toEqual([
             ['expression' => '30 13 * * *', 'timezone' => 'UTC', 'repeat_seconds' => null],
             ['expression' => '30 19 * * *', 'timezone' => 'Europe/Rome', 'repeat_seconds' => null],
         ]);
