@@ -265,6 +265,7 @@ it('describes the schedule', function () {
 
     expect($page['title'])->toBe('inspire')
         ->and(apiItems($page, 'task')['schedule_lines'])->toBe(['* * * * * (UTC)'])
+        ->and(apiItems($page, 'task')['environment_list'])->toBe('All')
         ->and(apiWidget($page, 'runs'))->toMatchArray(['pagination' => ['page' => 1, 'per_page' => 25, 'has_more' => false, 'total' => null]])
         ->and(apiWidget($page, 'runs')['rows'][0])->toMatchArray([
             'status' => 'failed',
