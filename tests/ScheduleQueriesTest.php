@@ -105,14 +105,6 @@ it('reports a task missed once its due run is older than the grace period', func
     expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('never reports a task missed in an environment it does not run in', function () {
-    insertTask('report', '*/5 * * * *', ['environments' => '["production"]']);
-    insertRun('report', '2026-01-01 11:00:00');
-
-    Date::setTestNow('2026-01-01 12:01:31');
-    expect(scheduledTask('report')['missed'])->toBeFalse();
-});
-
 it('reports a task that never ran as missed only once a slot passed after it was first seen', function () {
     insertTask('report', '*/5 * * * *', ['first_seen_at' => '2026-01-01 12:01:00']);
 
@@ -135,10 +127,12 @@ it('counts a skip at or after the due time as satisfying it', function () {
     expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('does not report tasks of other environments as missed', function () {
-    insertTask('report', attributes: ['environments' => '["production"]']);
+it('leaves out tasks that do not run in the current environment', function () {
+    insertTask('production', attributes: ['environments' => '["production"]']);
+    insertTask('testing', attributes: ['environments' => '["production","testing"]']);
+    insertTask('everywhere');
 
-    expect(scheduledTask('report')['missed'])->toBeFalse();
+    expect(app(ScheduleQueries::class)->tasks()->pluck('label')->all())->toBe(['everywhere', 'testing']);
 });
 
 it('computes the due time in the task timezone, across both repeated hours of a fall-back night', function () {

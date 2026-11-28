@@ -36,7 +36,8 @@ class ScheduleQueries
     /**
      * Tasks published by the scheduler with their next run, last run and whether a due run is missing.
      * A task is missed when its latest slot older than the grace period has neither a run nor a skip
-     * since, and passed after the task was first seen. Stale tasks are never missed.
+     * since, and passed after the task was first seen. Stale tasks are never missed. Tasks that do not run
+     * in the current environment are left out: they never fire any event here.
      *
      * Each task has the columns of its row, `environments` decoded, and `stale`, `next_run` (null when
      * stale), `last_run`, `missed` and `recent`: the `status` and `started_at` of its latest runs, oldest
@@ -54,7 +55,9 @@ class ScheduleQueries
             ->orderBy('detail')
             ->orderBy('key')
             ->limit(self::MAX_TASKS)
-            ->get();
+            ->get()
+            ->filter(fn (object $task) => $task->environments === null || in_array(app()->environment(), (array) json_decode($task->environments, true), true))
+            ->values();
 
         // No more than the retention keeps of each outcome, or pruned successes would leave only failures.
         $recent = min(self::RECENT_RUNS, ...array_map(fn (string $kept) => max(2, (int) config("spyglass.modules.schedule.retention.{$kept}", self::RECENT_RUNS)), ['successful_runs_per_task', 'failed_runs_per_task']));
@@ -289,11 +292,6 @@ class ScheduleQueries
      */
     protected function missed(array $task): bool
     {
-        // Such tasks never fire any event, so they have no record to compare with.
-        if ($task['environments'] !== [] && ! in_array(app()->environment(), $task['environments'], true)) {
-            return false;
-        }
-
         $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
         $slot = null;
 
