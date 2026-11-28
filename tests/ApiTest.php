@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
+use Keepsuit\Spyglass\Http\Controllers\ExceptionsController;
 use Keepsuit\Spyglass\Modules\Health\HealthModule;
 use Keepsuit\Spyglass\Modules\Logs\LogsModule;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
@@ -453,6 +454,33 @@ it('shows an exception group with its sources and occurrences', function () {
         ->and(array_column(apiWidget($page, 'occurrences')['expand'], 'key'))->toBe(['context', 'trace']);
 
     $this->getJson('/spyglass/api/exceptions/'.str_repeat('f', 40))->assertNotFound();
+});
+
+it('keeps the scope from the list to the group, which it resolves in every scope', function () {
+    $fingerprint = str_repeat('a', 40);
+    seedExceptionGroup($fingerprint, ['count' => 5], ['tenant:a', 'tenant:b']);
+    DB::table(Sources::ENTRIES)->where('scope', 'tenant:b')->update(['message' => 'In b']);
+
+    $list = $this->getJson('/spyglass/api/exceptions?scope=tenant:a')->assertOk()->json();
+    $page = $this->getJson("/spyglass/api/exceptions/{$fingerprint}?scope=tenant:a")->assertOk()->json();
+
+    expect(apiWidget($list, 'groups'))->toMatchArray(['link' => 'exceptions/{fingerprint}?scope=tenant%3Aa', 'note' => ExceptionsController::SCOPED_NOTE])
+        ->and(apiWidget($list, 'groups')['rows'][0])->toMatchArray(['count' => 1, 'message' => 'Boom'])
+        ->and($page['filters'][0])->toMatchArray(['key' => 'scope', 'value' => 'tenant:a'])
+        ->and(apiWidget($page, 'group'))->toMatchArray(['note' => ExceptionsController::SCOPED_NOTE])
+        ->and(apiWidget($page, 'group')['actions'][0]['label'])->toBe('Resolve in every scope')
+        ->and(collect(apiWidget($page, 'group')['items'])->firstWhere('key', 'count')['value'])->toBe(1)
+        ->and(apiWidget($page, 'occurrences'))->toMatchArray(['filters' => ['scope']])
+        ->and(array_column(apiWidget($page, 'occurrences')['rows'], 'message'))->toBe(['Boom'])
+        // Sources have no scope: the dashboard marks them as not filtered.
+        ->and(apiWidget($page, 'sources')['filters'])->toBe([]);
+
+    $unscoped = $this->getJson("/spyglass/api/exceptions/{$fingerprint}")->assertOk()->json();
+
+    expect(apiWidget($this->getJson('/spyglass/api/exceptions')->json(), 'groups'))->not->toHaveKey('note')
+        ->and(apiWidget($unscoped, 'group'))->not->toHaveKey('note')
+        ->and(apiWidget($unscoped, 'group')['actions'][0]['label'])->toBe('Resolve')
+        ->and(apiWidget($unscoped, 'occurrences')['rows'])->toHaveCount(2);
 });
 
 it('resolves and reopens an exception group', function () {

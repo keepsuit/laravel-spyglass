@@ -64,7 +64,7 @@ final class Widget
 
     /**
      * `$more` leads to the full list of a shortened table, `$empty` replaces the generic text of an empty one,
-     * and `$width` `half` lets two tables share a row. `$expand` fields are shown under a row the user opens.
+     * and `$width` `half` lets two tables share a row. `$expand` fields are shown under a row the user opens. `$note` says how to read the values.
      *
      * @param  list<Field>  $columns
      * @param  list<Field>  $expand
@@ -87,6 +87,7 @@ final class Widget
         ?string $empty = null,
         ?string $width = null,
         array $expand = [],
+        ?string $note = null,
     ): array {
         // Row values the templates need, shown or not.
         preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
@@ -106,7 +107,7 @@ final class Widget
             'link' => $link,
             'actions' => $actions,
             'filters' => $filters,
-            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width, 'expand' => $expand ?: null], fn ($option) => $option !== null),
+            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width, 'expand' => $expand ?: null, 'note' => $note], fn ($option) => $option !== null),
         ];
     }
 
@@ -164,12 +165,14 @@ final class Widget
     }
 
     /**
+     * `$note` says how to read the values.
+     *
      * @param  list<Field>  $fields
      * @param  array<string, mixed>  $values
      * @param  list<Action>  $actions
      * @return array<string, mixed>
      */
-    public static function details(string $key, string $label, array $fields, array $values, array $actions = []): array
+    public static function details(string $key, string $label, array $fields, array $values, array $actions = [], ?string $note = null): array
     {
         $values = self::rows($fields, [$values])[0];
 
@@ -180,6 +183,7 @@ final class Widget
             'items' => array_map(fn (array $field) => $field + ['value' => $values[$field['key']]], $fields),
             'actions' => $actions,
             'filters' => [],
+            ...($note === null ? [] : ['note' => $note]),
         ];
     }
 

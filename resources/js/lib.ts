@@ -40,6 +40,7 @@ export type TableWidget = {
     empty?: string;
     width?: 'half';
     expand?: Field[];
+    note?: string;
 };
 export type SeriesWidget = {
     type: 'series';
@@ -55,7 +56,7 @@ export type SeriesWidget = {
     /** Seconds per bucket: every bucket is present and holds counts. */
     step?: number;
 };
-export type DetailsWidget = { type: 'details'; key: string; label: string; items: (Field & { value: unknown })[]; actions: Action[]; filters: string[] };
+export type DetailsWidget = { type: 'details'; key: string; label: string; items: (Field & { value: unknown })[]; actions: Action[]; filters: string[]; note?: string };
 export type GroupWidget = {
     type: 'group';
     key: string;

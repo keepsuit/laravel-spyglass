@@ -19,6 +19,8 @@ class ExceptionsController extends Controller
 
     public const string NOTE = 'Recorded occurrences: at most one a minute per exception and scope.';
 
+    public const string SCOPED_NOTE = 'Count, last seen and message come from the occurrences recorded in this scope, at most one a minute per exception: the count is approximate. Status, resolve and reopen apply to every scope.';
+
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {
         parent::__construct($spyglass);
@@ -50,7 +52,8 @@ class ExceptionsController extends Controller
                 Widget::field('count', 'Count', 'number', sortable: true),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime', sortable: true),
                 Widget::field('status', 'Status', 'status', self::TONES),
-            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}', filters: ['status', 'class', 'scope']),
+            ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}'.self::scopeQuery($filters['scope'] ?? null),
+                filters: ['status', 'class', 'scope'], note: isset($filters['scope']) ? self::SCOPED_NOTE : null),
         ], [
             $this->rangeFilter($range),
             Widget::filter('status', 'Status', $filters['status'] ?? null, ['unresolved' => 'Unresolved', 'resolved' => 'Resolved']),
@@ -77,12 +80,14 @@ class ExceptionsController extends Controller
     public function show(Request $request, string $fingerprint): array
     {
         $page = $this->page($request);
-        $group = $this->queries->group($fingerprint);
+        $scope = $this->filters($request, ['scope' => ''])['scope'] ?? null;
+        $group = $this->queries->group($fingerprint, $scope);
 
         abort_if($group === null, 404);
 
         $group = self::group((array) $group);
-        $occurrences = $this->queries->occurrences($fingerprint, page: $page);
+        $occurrences = $this->queries->occurrences($fingerprint, page: $page, scope: $scope);
+        $everyScope = $scope === null ? '' : ' in every scope';
 
         return Widget::page($group['class'], [
             Widget::details('group', 'Exception', [
@@ -96,9 +101,9 @@ class ExceptionsController extends Controller
                 Widget::field('resolved_at', 'Resolved at', 'datetime'),
             ], $group, [
                 $group['status'] === 'resolved'
-                    ? Widget::action('reopen', 'Reopen', "exceptions/{$fingerprint}/reopen")
-                    : Widget::action('resolve', 'Resolve', "exceptions/{$fingerprint}/resolve"),
-            ]),
+                    ? Widget::action('reopen', "Reopen{$everyScope}", "exceptions/{$fingerprint}/reopen")
+                    : Widget::action('resolve', "Resolve{$everyScope}", "exceptions/{$fingerprint}/resolve"),
+            ], note: $scope === null ? null : self::SCOPED_NOTE),
             $this->sources($this->queries->sources($fingerprint)),
             Widget::table('occurrences', 'Occurrences', [
                 Widget::field('occurred_at', 'Occurred at', 'datetime'),
@@ -109,11 +114,18 @@ class ExceptionsController extends Controller
                 Widget::field('source', 'Source'),
                 Widget::field('user_id', 'User'),
                 Widget::field('scope_label', 'Scope'),
-            ], $this->rows($occurrences->items()), $occurrences, expand: [
+            ], $this->rows($occurrences->items()), $occurrences, filters: ['scope'], expand: [
                 Widget::field('context', 'Context', 'json'),
                 Widget::field('trace', 'Trace', 'json'),
             ]),
+        ], [
+            Widget::filter('scope', 'Scope', $scope, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
+    }
+
+    protected static function scopeQuery(?string $scope): string
+    {
+        return $scope === null ? '' : '?scope='.rawurlencode($scope);
     }
 
     public function resolve(string $fingerprint): Response

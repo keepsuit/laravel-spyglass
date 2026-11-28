@@ -50,14 +50,6 @@ function sameSiteException(string $message = 'Boom'): RuntimeException
     return new RuntimeException($message);
 }
 
-/**
- * Datetimes to the second: drivers differ in how they return the milliseconds.
- */
-function toSeconds(object $row): array
-{
-    return array_map(fn ($value) => is_string($value) && preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/', $value) ? substr($value, 0, 19) : $value, (array) $row);
-}
-
 function exceptionGroup(): array
 {
     return toSeconds(exceptionGroupsTable()->sole());
