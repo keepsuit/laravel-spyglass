@@ -72,12 +72,14 @@ class QueueController extends Controller
                 Widget::field('delayed', 'Delayed', 'number'),
             ], $sizes->filter(fn (array $size) => ! isset($filters['queue']) || $size['queue'] === $filters['queue']), filters: ['queue']),
             Widget::table('jobs', 'Jobs', [
-                Widget::field('job', 'Job'),
+                Widget::field('job', 'Job', 'link'),
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
                 ...array_map(fn (array $counter) => Widget::field($counter['key'], $counter['label'], 'number'), $counters),
                 Widget::field('duration_max', 'Max duration', 'duration'),
-            ], $this->queries->totals($from, $to, ['queue', 'job'], $aggregateBy), filters: $aggregateFilters),
+            ], $this->queries->totals($from, $to, ['queue', 'job'], $aggregateBy)->map(
+                fn (array $row) => [...$row, 'job' => Widget::link($row['job'], 'queue?'.http_build_query([...$filters, 'job' => $row['job']]))],
+            ), filters: $aggregateFilters),
             Widget::table('failed_jobs', 'Failed jobs', [
                 Widget::field('failed_at', 'Failed at', 'datetime'),
                 Widget::field('job', 'Job'),

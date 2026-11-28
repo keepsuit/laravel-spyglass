@@ -300,7 +300,7 @@ it('describes the queue', function () {
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(13)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
         ->and(apiWidget($page, 'throughput')['points'][12])->toMatchArray(['bucket' => '2026-01-01T12:00:00.000Z', 'processed' => 0])
-        ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
+        ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => ['label' => 'A', 'url' => 'queue?range=1h&job=A'], 'connection' => 'database', 'queue' => 'default'])
         ->and(apiWidget($page, 'sizes')['rows'])->toHaveCount(2)
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray([
             'link' => 'queue/failed-jobs/{uuid}',
