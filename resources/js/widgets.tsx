@@ -56,7 +56,7 @@ const dots: Record<Tone, string> = { ok: 'bg-ok', info: 'bg-info', warning: 'bg-
 export function Status({ value, tone, tag = false }: { value: string; tone?: Tone; tag?: boolean }) {
     return (
         <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tag ? '' : 'before:size-1.5 before:rounded-full'} ${
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tag ? '' : 'gap-1.5 before:size-1.5 before:rounded-full'} ${
                 tone ? pills[tone] : 'bg-line/50 text-muted before:bg-muted'
             }`}
         >
