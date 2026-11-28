@@ -52,10 +52,11 @@ const pills: Record<Tone, string> = {
 
 const dots: Record<Tone, string> = { ok: 'bg-ok', info: 'bg-info', warning: 'bg-warning', error: 'bg-error' };
 
-export function Status({ value, tone }: { value: string; tone?: Tone }) {
+/** A pill, with a dot unless it is a plain `tag`. */
+export function Status({ value, tone, tag = false }: { value: string; tone?: Tone; tag?: boolean }) {
     return (
         <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap before:size-1.5 before:rounded-full ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tag ? '' : 'before:size-1.5 before:rounded-full'} ${
                 tone ? pills[tone] : 'bg-line/50 text-muted before:bg-muted'
             }`}
         >
@@ -102,7 +103,8 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
                 </time>
             );
         case 'status':
-            return <Status value={String(value)} tone={field.tones?.[String(value)]} />;
+        case 'tag':
+            return <Status value={String(value)} tone={field.tones?.[String(value)]} tag={field.type === 'tag'} />;
         case 'runs': {
             const runs = value as { status: string; started_at: string }[];
             const failed = runs.filter((run) => ['error', 'warning'].includes(field.tones?.[run.status] ?? '')).length;

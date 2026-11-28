@@ -27,7 +27,7 @@ class ScheduleController extends Controller
         return Widget::page('Schedule', [
             Widget::table('tasks', 'Tasks', [
                 Widget::field('name', 'Task', 'label', sortable: true),
-                Widget::field('type', 'Type', 'status'),
+                Widget::field('type', 'Type', 'tag'),
                 Widget::field('expressions', 'Expression', 'lines'),
                 Widget::field('last_status', 'Last run', 'status', self::TONES),
                 Widget::field('recent', 'Recent runs', 'runs', self::TONES),
@@ -55,7 +55,7 @@ class ScheduleController extends Controller
         return Widget::page($details['label'].($details['detail'] === null ? '' : " ({$details['detail']})"), [
             Widget::details('task', 'Task', [
                 Widget::field('label', 'Task'),
-                Widget::field('type', 'Type', 'status'),
+                Widget::field('type', 'Type', 'tag'),
                 Widget::field('detail', 'Arguments'),
                 Widget::field('command', 'Command', 'code'),
                 Widget::field('description', 'Description'),

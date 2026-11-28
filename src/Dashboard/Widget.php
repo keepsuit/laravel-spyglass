@@ -184,7 +184,7 @@ final class Widget
     }
 
     /**
-     * `$type` is one of text, code (an identifier, in monospace), number, boolean, datetime, duration (milliseconds), status, json, link
+     * `$type` is one of text, code (an identifier, in monospace), number, boolean, datetime, duration (milliseconds), status, tag (a status without a dot), json, link
      * (`{label, url, title}`, url null when not linkable) or runs (a list of `{status, started_at}`, oldest first). A status maps its values to the tones ok, info, warning and error; others are neutral.
      *
      * A `$sortable` column of a paginated table is sorted by the server, through the `sort` query value
