@@ -245,7 +245,7 @@ function TextFilter({ filter }: { filter: Filter }) {
             value={value}
             onValueChange={(next, details) => {
                 setValue(next);
-                if (details.reason === 'item-press') apply(next);
+                if (details.reason === 'item-press' || details.reason === 'clear-press') apply(next);
             }}
             itemToStringValue={(item: Choice) => item.value}
             filter={(item: Choice, query) => `${item.value} ${item.label}`.toLowerCase().includes(query.trim().toLowerCase())}
@@ -253,16 +253,21 @@ function TextFilter({ filter }: { filter: Filter }) {
         >
             <label className="flex flex-col gap-1 text-muted">
                 {filter.label}
-                <Autocomplete.Input
-                    onKeyDown={(event) => event.key === 'Enter' && apply(event.currentTarget.value)}
-                    onBlur={(event) => apply(event.currentTarget.value)}
-                    className={`${control} w-full sm:w-48`}
-                />
+                <Autocomplete.InputGroup className="relative w-full sm:w-64">
+                    <Autocomplete.Input
+                        onKeyDown={(event) => event.key === 'Enter' && apply(event.currentTarget.value)}
+                        onBlur={(event) => apply(event.currentTarget.value)}
+                        className={`${control} w-full pr-9`}
+                    />
+                    <Autocomplete.Clear aria-label={`Clear ${filter.label}`} className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted hover:text-ink">
+                        ✕
+                    </Autocomplete.Clear>
+                </Autocomplete.InputGroup>
             </label>
             {(filter.suggestions?.length ?? 0) > 0 && (
                 <Autocomplete.Portal>
-                    <Autocomplete.Positioner sideOffset={4} className="z-10 outline-none">
-                        <Autocomplete.Popup className="w-[max(var(--anchor-width),16rem)] max-w-[var(--available-width)] rounded-xl border border-line bg-surface p-1 text-ink shadow-lg shadow-ink/10">
+                    <Autocomplete.Positioner sideOffset={4} align="start" className="z-10 outline-none">
+                        <Autocomplete.Popup className="w-[var(--anchor-width)] max-w-[var(--available-width)] rounded-xl border border-line bg-surface p-1 text-ink shadow-lg shadow-ink/10">
                             <Autocomplete.Empty>
                                 <p className="px-3 py-2 text-muted">No known value matches: press Enter to filter by this text.</p>
                             </Autocomplete.Empty>
@@ -294,7 +299,7 @@ function OptionFilter({ filter, fromUrl }: { filter: Filter; fromUrl: string | n
         <div className="flex flex-col gap-1 text-muted">
             <Select.Root items={items} value={filter.value} onValueChange={(value) => setParams({ [filter.key]: value as string | null })}>
                 <Select.Label>{filter.label}</Select.Label>
-                <Select.Trigger className={`${control} flex w-full items-center sm:w-auto sm:min-w-40 justify-between gap-2 hover:border-muted`}>
+                <Select.Trigger className={`${control} flex w-full items-center sm:w-auto sm:min-w-48 justify-between gap-2 hover:border-muted`}>
                     <Select.Value />
                     <Select.Icon className="text-muted">▾</Select.Icon>
                 </Select.Trigger>
