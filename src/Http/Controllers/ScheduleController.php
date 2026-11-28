@@ -57,7 +57,7 @@ class ScheduleController extends Controller
                 Widget::field('label', 'Task'),
                 Widget::field('type', 'Type', 'status'),
                 Widget::field('detail', 'Arguments'),
-                Widget::field('command', 'Command'),
+                Widget::field('command', 'Command', 'code'),
                 Widget::field('description', 'Description'),
                 Widget::field('schedule_lines', 'Schedule', 'lines'),
                 Widget::field('environment_list', 'Environments'),

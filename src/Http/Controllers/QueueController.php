@@ -150,8 +150,8 @@ class QueueController extends Controller
 
         return Widget::page('Failed job', [
             Widget::details('job', 'Failed job', [
-                Widget::field('uuid', 'UUID'),
-                Widget::field('job', 'Job'),
+                Widget::field('uuid', 'UUID', 'code'),
+                Widget::field('job', 'Job', 'code'),
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
                 Widget::field('attempts', 'Attempts', 'number'),

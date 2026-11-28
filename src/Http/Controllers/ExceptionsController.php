@@ -46,7 +46,7 @@ class ExceptionsController extends Controller
             Widget::table('groups', 'Exceptions', [
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
-                Widget::field('location', 'Location'),
+                Widget::field('location', 'Location', 'code'),
                 Widget::field('count', 'Count', 'number', sortable: true),
                 Widget::field('last_seen_at', 'Last seen at', 'datetime', sortable: true),
                 Widget::field('status', 'Status', 'status', self::TONES),
@@ -86,9 +86,9 @@ class ExceptionsController extends Controller
 
         return Widget::page($group['class'], [
             Widget::details('group', 'Exception', [
-                Widget::field('class', 'Class'),
+                Widget::field('class', 'Class', 'code'),
                 Widget::field('message', 'Message'),
-                Widget::field('location', 'Location'),
+                Widget::field('location', 'Location', 'code'),
                 Widget::field('count', 'Count', 'number'),
                 Widget::field('status', 'Status', 'status', self::TONES),
                 Widget::field('first_seen_at', 'First seen at', 'datetime'),
@@ -103,7 +103,7 @@ class ExceptionsController extends Controller
             Widget::table('occurrences', 'Occurrences', [
                 Widget::field('occurred_at', 'Occurred at', 'datetime'),
                 Widget::field('message', 'Message'),
-                Widget::field('cause_class', 'Cause'),
+                Widget::field('cause_class', 'Cause', 'code'),
                 Widget::field('cause_message', 'Cause message'),
                 Widget::field('source_type', 'Source type'),
                 Widget::field('source', 'Source'),

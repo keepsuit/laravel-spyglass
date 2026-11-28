@@ -136,6 +136,8 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
                 </span>
             );
         }
+        case 'code':
+            return <code className="font-mono text-[0.9em] break-words">{breakable(String(value))}</code>;
         case 'lines':
             return (
                 <span className="block whitespace-nowrap">

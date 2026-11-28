@@ -13,6 +13,7 @@ const field = (type: string, extra: Partial<Field> = {}): Field => ({ key: 'v', 
 describe('Value', () => {
     it.each([
         ['text', 'hello', 'hello'],
+        ['code', 'app/Foo.php:12', 'app/Foo.php:12'],
         ['number', 1234, new Intl.NumberFormat().format(1234)],
         ['duration', 1500, '1.5 s'],
         ['duration', 125_000, '2 min 5 s'],
