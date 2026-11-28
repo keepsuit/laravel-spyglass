@@ -19,13 +19,14 @@ class ExceptionQueries
     public function __construct(protected Spyglass $spyglass) {}
 
     /**
-     * Groups, last seen first. A group is resolved until an occurrence newer than `resolved_at`: occurrences
+     * Groups by `$sort` (column, descending), then last seen first. A group is resolved until an occurrence newer than `resolved_at`: occurrences
      * are stored after the end of their request or job, so storing one cannot tell whether it is newer.
      *
      * @param  array{status?: 'resolved'|'unresolved', class?: string, scope?: string}  $filters
+     * @param  array{string, bool}|null  $sort  only trusted columns
      * @return Paginator<int, object>
      */
-    public function groups(array $filters = [], int $perPage = 25, int $page = 1): Paginator
+    public function groups(array $filters = [], int $perPage = 25, int $page = 1, ?array $sort = null): Paginator
     {
         $groups = $this->groupsTable()
             ->when(($filters['status'] ?? null) === 'unresolved', fn (Builder $query) => $this->whereUnresolved($query))
@@ -38,6 +39,7 @@ class ExceptionQueries
                     ->where(ExceptionsModule::OCCURRENCES.'.scope', $filters['scope'] ?? null)
                     ->whereColumn(ExceptionsModule::OCCURRENCES.'.signature', ExceptionsModule::GROUPS.'.signature'),
             ))
+            ->when($sort, fn (Builder $query, array $sort) => $query->orderBy($sort[0], $sort[1] ? 'desc' : 'asc'))
             ->orderByDesc('last_seen_at')
             ->orderByDesc('id')
             ->simplePaginate($this->clamp($perPage), page: $page);

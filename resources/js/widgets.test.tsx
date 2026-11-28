@@ -13,6 +13,7 @@ const field = (type: string, extra: Partial<Field> = {}): Field => ({ key: 'v', 
 describe('Value', () => {
     it.each([
         ['text', 'hello', 'hello'],
+        ['code', 'app/Foo.php:12', 'app/Foo.php:12'],
         ['number', 1234, new Intl.NumberFormat().format(1234)],
         ['duration', 1500, '1.5 s'],
         ['duration', 125_000, '2 min 5 s'],
@@ -100,6 +101,53 @@ describe('Table', () => {
         const [title, date] = screen.getAllByRole('cell');
         expect([title.dataset.label, title.dataset.empty]).toEqual([undefined, undefined]);
         expect([date.dataset.label, date.dataset.empty]).toEqual(['Failed at', 'true']);
+    });
+
+    it('sorts the rows of an unpaginated table in the browser, empty values last', () => {
+        const jobs: TableWidget = {
+            ...table,
+            key: 'jobs',
+            columns: [{ key: 'job', label: 'Job', type: 'link', sortable: true }, { key: 'failed', label: 'Failed', type: 'number', sortable: true }],
+            rows: [
+                { job: { label: 'ReportJob', url: null }, failed: 2 },
+                { job: { label: 'MailJob', url: null }, failed: null },
+                { job: { label: 'SyncJob', url: null }, failed: 9 },
+            ],
+            pagination: null,
+            link: null,
+            actions: [],
+        };
+        const order = () => screen.getAllByRole('row').slice(1).map((row) => row.querySelector('td')?.textContent);
+
+        wrap(<Table widget={jobs} ignored={[]} filtered={false} page={null} sort="jobs:-failed" />);
+        expect(order()).toEqual(['SyncJob', 'ReportJob', 'MailJob']);
+        expect(screen.getByRole('columnheader', { name: /Failed/ }).getAttribute('aria-sort')).toBe('descending');
+
+        cleanup();
+        wrap(<Table widget={jobs} ignored={[]} filtered={false} page={null} sort="jobs:job" />);
+        expect(order()).toEqual(['MailJob', 'ReportJob', 'SyncJob']);
+
+        fireEvent.click(screen.getByRole('button', { name: /Failed/ }));
+        expect(new URLSearchParams(window.location.search).get('sort')).toBe('jobs:-failed');
+    });
+
+    it('opens the expanded fields of a row under it', () => {
+        const occurrences: TableWidget = {
+            ...table,
+            columns: [{ key: 'message', label: 'Message', type: 'text' }],
+            rows: [{ message: 'Boom', trace: [{ file: 'app/Foo.php', line: 3 }] }],
+            link: null,
+            actions: [],
+            expand: [{ key: 'trace', label: 'Trace', type: 'json' }],
+        };
+        wrap(<Table widget={occurrences} ignored={[]} filtered={false} page={null} />);
+
+        expect(screen.queryByText('Trace')).toBeNull();
+        fireEvent.click(screen.getByText('Boom'));
+        expect(screen.getByText('Trace')).toBeTruthy();
+        expect(document.querySelector('pre')?.textContent).toContain('app/Foo.php');
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        expect(screen.queryByText('Trace')).toBeNull();
     });
 
     it('explains an empty table', () => {

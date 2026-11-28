@@ -300,7 +300,7 @@ it('describes the queue', function () {
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(13)
         ->and(apiWidget($page, 'throughput')['points'][0])->toMatchArray(['bucket' => '2026-01-01T11:00:00.000Z', 'processed' => 4, 'failed' => 1])
         ->and(apiWidget($page, 'throughput')['points'][12])->toMatchArray(['bucket' => '2026-01-01T12:00:00.000Z', 'processed' => 0])
-        ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => 'A', 'connection' => 'database', 'queue' => 'default'])
+        ->and(apiWidget($page, 'jobs')['rows'][0])->toMatchArray(['job' => ['label' => 'A', 'url' => 'queue?range=1h&job=A'], 'connection' => 'database', 'queue' => 'default'])
         ->and(apiWidget($page, 'sizes')['rows'])->toHaveCount(2)
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray([
             'link' => 'queue/failed-jobs/{uuid}',
@@ -310,7 +310,7 @@ it('describes the queue', function () {
         ->and(apiWidget($page, 'failed_jobs')['rows'][0])->toBe([
             'uuid' => 'u-1',
             'failed_at' => '2026-01-01T11:00:00.000Z',
-            'job' => 'A',
+            'job' => ['label' => 'A', 'url' => null],
             'connection' => 'database',
             'queue' => 'default',
             'exception' => ['label' => 'E', 'url' => 'exceptions/'.str_repeat('a', 40)],
@@ -423,6 +423,17 @@ it('describes exceptions', function () {
     $this->getJson('/spyglass/api/exceptions?status=open')->assertUnprocessable();
 });
 
+it('sorts exception groups by a sortable column only', function () {
+    seedExceptionGroup(str_repeat('a', 40), ['count' => 3, 'last_seen_at' => '2026-03-01 12:00:00']);
+    seedExceptionGroup(str_repeat('b', 40), ['count' => 7, 'last_seen_at' => '2026-02-01 12:00:00']);
+    $order = fn (string $sort) => array_column(apiWidget($this->getJson("/spyglass/api/exceptions?sort={$sort}")->assertOk()->json(), 'groups')['rows'], 'fingerprint');
+
+    expect($order('groups:-count'))->toBe([str_repeat('b', 40), str_repeat('a', 40)])
+        ->and($order('groups:count'))->toBe([str_repeat('a', 40), str_repeat('b', 40)])
+        ->and($order('groups:message'))->toBe([str_repeat('a', 40), str_repeat('b', 40)])
+        ->and($order('other:-count'))->toBe([str_repeat('a', 40), str_repeat('b', 40)]);
+});
+
 it('shows an exception group with its sources and occurrences', function () {
     $fingerprint = str_repeat('a', 40);
     seedExceptionGroup($fingerprint);
@@ -436,7 +447,9 @@ it('shows an exception group with its sources and occurrences', function () {
 
     expect(apiWidget($page, 'group')['actions'])->toBe([['key' => 'resolve', 'label' => 'Resolve', 'url' => "exceptions/{$fingerprint}/resolve"]])
         ->and(apiWidget($page, 'sources')['rows'][0])->toMatchArray(['source_type' => 'job', 'source' => 'A', 'count' => 3])
-        ->and(apiWidget($page, 'occurrences')['rows'][0]['trace'])->toBe([['file' => 'app/Foo.php', 'line' => 12, 'function' => 'handle']]);
+        ->and(apiWidget($page, 'occurrences')['rows'][0]['trace'])->toBe([['file' => 'app/Foo.php', 'line' => 12, 'function' => 'handle']])
+        ->and(array_column(apiWidget($page, 'occurrences')['columns'], 'key'))->not->toContain('context', 'trace')
+        ->and(array_column(apiWidget($page, 'occurrences')['expand'], 'key'))->toBe(['context', 'trace']);
 
     $this->getJson('/spyglass/api/exceptions/'.str_repeat('f', 40))->assertNotFound();
 });
@@ -573,9 +586,8 @@ it('shows the average duration per attempt and the max duration of the queue', f
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
     // Queued jobs have no duration: 400 ms over 4 attempts.
-    expect(apiWidget($page, 'duration_avg'))->toMatchArray(['value' => 100, 'format' => 'duration'])
-        ->and(apiWidget($page, 'duration_max')['value'])->toBe(250)
-        ->and(apiWidget($this->getJson('/spyglass/api/queue?range=1h&job=Missing')->json(), 'duration_avg')['value'])->toBeNull();
+    expect(apiWidget($page, 'duration'))->toMatchArray(['value' => 100, 'format' => 'duration', 'detail' => ['label' => 'Max', 'value' => 250]])
+        ->and(apiWidget($this->getJson('/spyglass/api/queue?range=1h&job=Missing')->json(), 'duration'))->toMatchArray(['value' => null, 'detail' => ['label' => 'Max', 'value' => null]]);
 });
 
 it('sums the queue over 7 days into regular 30-minute buckets that add up to the cards', function () {
@@ -603,4 +615,32 @@ it('sums the queue over 7 days into regular 30-minute buckets that add up to the
     } finally {
         date_default_timezone_set('UTC');
     }
+});
+
+it('counts released and timed out attempts as retried', function () {
+    $this->travelTo('2026-01-01 12:00:00');
+    DB::table(QueueModule::AGGREGATES)->insert([
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'A', 'released' => 4, 'timed_out' => 1],
+    ]);
+
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
+
+    expect(apiWidgets($page)->where('type', 'metric')->pluck('key')->all())->toBe(['queued', 'pending', 'processed', 'failed', 'retried', 'duration'])
+        ->and(apiWidget($page, 'retried'))->toMatchArray(['value' => 5, 'detail' => ['label' => 'Timed out', 'value' => 1]]);
+});
+
+it('shows jobs by their short class name', function () {
+    $this->travelTo('2026-01-01 12:00:00');
+    DB::table(QueueModule::AGGREGATES)->insert([
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'App\\Jobs\\ReportJob', 'processed' => 1],
+        ['bucket' => '2026-01-01 11:00:00', 'connection' => 'database', 'queue' => 'default', 'job' => 'Closure (routes/console.php:3)', 'processed' => 1],
+    ]);
+
+    $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
+
+    expect(collect(apiWidget($page, 'jobs')['rows'])->pluck('job')->sortBy('label')->values()->all())->toBe([
+        ['label' => 'Closure (routes/console.php:3)', 'url' => 'queue?range=1h&job=Closure+%28routes%2Fconsole.php%3A3%29'],
+        ['label' => 'ReportJob', 'url' => 'queue?range=1h&job=App%5CJobs%5CReportJob', 'title' => 'App\\Jobs\\ReportJob'],
+    ])
+        ->and(collect($page['filters'])->firstWhere('key', 'job')['suggestions'])->toContain(['value' => 'App\\Jobs\\ReportJob', 'label' => 'ReportJob']);
 });

@@ -39,16 +39,16 @@ class ExceptionsController extends Controller
             },
             'class' => $filters['class'] ?? null,
             'scope' => $filters['scope'] ?? null,
-        ], fn ($value) => $value !== null), page: $this->page($request));
+        ], fn ($value) => $value !== null), page: $this->page($request), sort: $this->sort($request, 'groups', ['count', 'last_seen_at']));
 
         return Widget::page('Exceptions', [
             self::chart($this->queries->hourly($from = Buckets::start(self::HOURS[$range], self::HOUR), array_intersect_key($filters, array_flip(['class', 'scope']))), $from),
             Widget::table('groups', 'Exceptions', [
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
-                Widget::field('location', 'Location'),
-                Widget::field('count', 'Count', 'number'),
-                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
+                Widget::field('location', 'Location', 'code'),
+                Widget::field('count', 'Count', 'number', sortable: true),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime', sortable: true),
                 Widget::field('status', 'Status', 'status', self::TONES),
             ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}', filters: ['status', 'class', 'scope']),
         ], [
@@ -86,9 +86,9 @@ class ExceptionsController extends Controller
 
         return Widget::page($group['class'], [
             Widget::details('group', 'Exception', [
-                Widget::field('class', 'Class'),
+                Widget::field('class', 'Class', 'code'),
                 Widget::field('message', 'Message'),
-                Widget::field('location', 'Location'),
+                Widget::field('location', 'Location', 'code'),
                 Widget::field('count', 'Count', 'number'),
                 Widget::field('status', 'Status', 'status', self::TONES),
                 Widget::field('first_seen_at', 'First seen at', 'datetime'),
@@ -103,15 +103,16 @@ class ExceptionsController extends Controller
             Widget::table('occurrences', 'Occurrences', [
                 Widget::field('occurred_at', 'Occurred at', 'datetime'),
                 Widget::field('message', 'Message'),
-                Widget::field('cause_class', 'Cause'),
+                Widget::field('cause_class', 'Cause', 'code'),
                 Widget::field('cause_message', 'Cause message'),
                 Widget::field('source_type', 'Source type'),
                 Widget::field('source', 'Source'),
                 Widget::field('user_id', 'User'),
                 Widget::field('scope_label', 'Scope'),
+            ], $this->rows($occurrences->items()), $occurrences, expand: [
                 Widget::field('context', 'Context', 'json'),
                 Widget::field('trace', 'Trace', 'json'),
-            ], $this->rows($occurrences->items()), $occurrences),
+            ]),
         ]);
     }
 

@@ -4,6 +4,7 @@ namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
+use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Spyglass;
 
 /**
@@ -49,6 +50,23 @@ abstract class Controller
         $request->validate(['page' => ['sometimes', 'integer', 'min:1', 'max:10000']]);
 
         return $request->integer('page', 1);
+    }
+
+    /**
+     * The column of `$table` the request sorts by, among `$columns`, as `[column, descending]`.
+     *
+     * @param  list<string>  $columns
+     * @return array{string, bool}|null
+     */
+    protected function sort(Request $request, string $table, array $columns): ?array
+    {
+        $sort = $request->query('sort');
+
+        if (! is_string($sort) || ! preg_match('/^(\w+):(-?)(\w+)$/', $sort, $match) || $match[1] !== $table || ! in_array($match[3], $columns, true)) {
+            return null;
+        }
+
+        return [$match[3], $match[2] === '-'];
     }
 
     /**
@@ -103,6 +121,18 @@ abstract class Controller
             Widget::field('count', 'Count', 'number'),
             Widget::field('last_seen_at', 'Last seen at', 'datetime'),
         ], $this->rows($sources));
+    }
+
+    /**
+     * A job by its short class name, the full one on hover.
+     *
+     * @return array{label: string, url: ?string, title?: string}|null
+     */
+    protected function jobLink(?string $job, ?string $url = null): ?array
+    {
+        $short = $job !== null && preg_match(ScheduleModule::CLASS_NAME, $job) ? class_basename($job) : $job;
+
+        return Widget::link($short, $url, $short === $job ? null : $job);
     }
 
     /**

@@ -26,14 +26,14 @@ class ScheduleController extends Controller
     {
         return Widget::page('Schedule', [
             Widget::table('tasks', 'Tasks', [
-                Widget::field('name', 'Task', 'label'),
-                Widget::field('type', 'Type', 'status'),
+                Widget::field('name', 'Task', 'label', sortable: true),
+                Widget::field('type', 'Type', 'tag'),
                 Widget::field('expressions', 'Expression', 'lines'),
                 Widget::field('last_status', 'Last run', 'status', self::TONES),
                 Widget::field('recent', 'Recent runs', 'runs', self::TONES),
-                Widget::field('last_started_at', 'Last started at', 'datetime'),
-                Widget::field('last_duration_ms', 'Duration', 'duration'),
-                Widget::field('next_run', 'Next run', 'datetime'),
+                Widget::field('last_started_at', 'Last started at', 'datetime', sortable: true),
+                Widget::field('last_duration_ms', 'Duration', 'duration', sortable: true),
+                Widget::field('next_run', 'Next run', 'datetime', sortable: true),
                 Widget::field('missed', 'Missed', 'boolean'),
                 Widget::field('stale', 'Removed', 'boolean'),
             ], $this->queries->tasks()->map(self::flatten(...)), link: 'schedule/{key}'),
@@ -55,9 +55,9 @@ class ScheduleController extends Controller
         return Widget::page($details['label'].($details['detail'] === null ? '' : " ({$details['detail']})"), [
             Widget::details('task', 'Task', [
                 Widget::field('label', 'Task'),
-                Widget::field('type', 'Type', 'status'),
+                Widget::field('type', 'Type', 'tag'),
                 Widget::field('detail', 'Arguments'),
-                Widget::field('command', 'Command'),
+                Widget::field('command', 'Command', 'code'),
                 Widget::field('description', 'Description'),
                 Widget::field('schedule_lines', 'Schedule', 'lines'),
                 Widget::field('environment_list', 'Environments'),

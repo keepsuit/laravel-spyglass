@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Date;
  *
  * @internal
  *
- * @phpstan-type Field array{key: string, label: string, type: string, tones?: array<string, string>}
+ * @phpstan-type Field array{key: string, label: string, type: string, tones?: array<string, string>, sortable?: true}
  * @phpstan-type Action array{key: string, label: string, url: string}
  * @phpstan-type Filter array{key: string, label: string, value: ?string, options: ?list<array{value: string, label: string}>, suggestions?: list<array{value: string, label: string}>}
  */
@@ -36,9 +36,10 @@ final class Widget
 
     /**
      * `$link` leads to the page with the details, `$tone` (ok, info, warning, error) flags the value. `$format`
-     * `duration` reads the value as milliseconds.
+     * `duration` reads the value as milliseconds. `$detail` is a smaller labelled value shown under it, in the same format.
      *
      * @param  list<string>  $filters
+     * @param  array{label: string, value: int|float|null}|null  $detail
      * @return array<string, mixed>
      */
     public static function metric(
@@ -49,6 +50,7 @@ final class Widget
         ?string $link = null,
         ?string $tone = null,
         ?string $format = null,
+        ?array $detail = null,
     ): array {
         return [
             'type' => 'metric',
@@ -56,15 +58,16 @@ final class Widget
             'label' => $label,
             'value' => $value,
             'filters' => $filters,
-            ...array_filter(compact('link', 'tone', 'format'), fn ($option) => $option !== null),
+            ...array_filter(compact('link', 'tone', 'format', 'detail'), fn ($option) => $option !== null),
         ];
     }
 
     /**
      * `$more` leads to the full list of a shortened table, `$empty` replaces the generic text of an empty one,
-     * and `$width` `half` lets two tables share a row.
+     * and `$width` `half` lets two tables share a row. `$expand` fields are shown under a row the user opens.
      *
      * @param  list<Field>  $columns
+     * @param  list<Field>  $expand
      * @param  iterable<array<string, mixed>>  $rows
      * @param  Paginator<int, mixed>|null  $paginator
      * @param  list<Action>  $actions
@@ -83,6 +86,7 @@ final class Widget
         ?string $more = null,
         ?string $empty = null,
         ?string $width = null,
+        array $expand = [],
     ): array {
         // Row values the templates need, shown or not.
         preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
@@ -92,7 +96,7 @@ final class Widget
             'key' => $key,
             'label' => $label,
             'columns' => $columns,
-            'rows' => self::rows($columns, $rows, $placeholders[1]),
+            'rows' => self::rows([...$columns, ...$expand], $rows, $placeholders[1]),
             'pagination' => $paginator === null ? null : [
                 'page' => $paginator->currentPage(),
                 'per_page' => $paginator->perPage(),
@@ -102,7 +106,7 @@ final class Widget
             'link' => $link,
             'actions' => $actions,
             'filters' => $filters,
-            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width], fn ($option) => $option !== null),
+            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width, 'expand' => $expand ?: null], fn ($option) => $option !== null),
         ];
     }
 
@@ -180,18 +184,25 @@ final class Widget
     }
 
     /**
-     * `$type` is one of text, number, boolean, datetime, duration (milliseconds), status, json, link
-     * (`{label, url}`, url null when not linkable) or runs (a list of `{status, started_at}`, oldest first). A status maps its values to the tones ok, info, warning and error; others are neutral.
+     * `$type` is one of text, code (an identifier, in monospace), number, boolean, datetime, duration (milliseconds), status, tag (a status without a dot), json, link
+     * (`{label, url, title}`, url null when not linkable) or runs (a list of `{status, started_at}`, oldest first). A status maps its values to the tones ok, info, warning and error; others are neutral.
+     *
+     * A `$sortable` column of a paginated table is sorted by the server, through the `sort` query value
+     * `{table}:{column}` or `{table}:-{column}` for descending; other tables sort their rows in the browser.
      *
      * @param  array<string, string>|null  $tones
      * @return Field
      */
-    public static function field(string $key, string $label, string $type = 'text', ?array $tones = null): array
+    public static function field(string $key, string $label, string $type = 'text', ?array $tones = null, bool $sortable = false): array
     {
         $field = ['key' => $key, 'label' => $label, 'type' => $type];
 
         if ($tones !== null) {
             $field['tones'] = $tones;
+        }
+
+        if ($sortable) {
+            $field['sortable'] = true;
         }
 
         return $field;
@@ -226,13 +237,13 @@ final class Widget
     }
 
     /**
-     * A null `$url` shows the label without a link.
+     * A null `$url` shows the label without a link, `$title` shows on hover.
      *
-     * @return array{label: string, url: ?string}|null
+     * @return array{label: string, url: ?string, title?: string}|null
      */
-    public static function link(?string $label, ?string $url): ?array
+    public static function link(?string $label, ?string $url, ?string $title = null): ?array
     {
-        return $label === null ? null : ['label' => $label, 'url' => $url];
+        return $label === null ? null : ['label' => $label, 'url' => $url, ...($title === null ? [] : ['title' => $title])];
     }
 
     /**

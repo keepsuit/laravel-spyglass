@@ -62,11 +62,11 @@ class OverviewController extends Controller
             $groups['queue'] = Widget::group('queue', 'Queue', [
                 QueueController::chart($queries->series($from, now()), $from, 300, ['processed', 'failed'], label: 'Throughput in 24h'),
                 Widget::table('failed_jobs', 'Latest failed jobs', [
-                    Widget::field('job', 'Job'),
+                    Widget::field('job', 'Job', 'link'),
                     Widget::field('queue', 'Queue'),
                     Widget::field('exception_class', 'Exception'),
                     Widget::field('failed_at', 'Failed at', 'datetime'),
-                ], $this->rows($failed->items()), link: 'queue/failed-jobs/{uuid}', empty: 'No failed jobs.'),
+                ], array_map(fn (array $row) => [...$row, 'job' => $this->jobLink($row['job'])], $this->rows($failed->items())), link: 'queue/failed-jobs/{uuid}', empty: 'No failed jobs.'),
             ], more: 'queue');
         }
 
