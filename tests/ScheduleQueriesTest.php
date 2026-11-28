@@ -23,16 +23,22 @@ beforeEach(function () {
 /**
  * @param  array<string, mixed>  $attributes
  */
-function insertTask(string $label, string $expression = '* * * * *', array $attributes = []): void
+function insertTask(string $label, string|array $expression = '* * * * *', array $attributes = []): void
 {
+    $schedules = array_map(fn (string $expression) => [
+        'expression' => $expression,
+        'timezone' => $attributes['timezone'] ?? 'UTC',
+        'repeat_seconds' => $attributes['repeat_seconds'] ?? null,
+    ], (array) $expression);
+
     DB::table(ScheduleModule::TASKS)->insert([
         'key' => sha1($label),
         'label' => $label,
-        'expression' => $expression,
-        'timezone' => 'UTC',
+        'type' => 'closure',
+        'schedules' => json_encode($schedules),
         'first_seen_at' => '2025-01-01 00:00:00',
         'last_seen_at' => Date::now('UTC')->format('Y-m-d H:i:s'),
-        ...$attributes,
+        ...array_diff_key($attributes, ['timezone' => true, 'repeat_seconds' => true]),
     ]);
 }
 
@@ -61,7 +67,7 @@ it('lists the published tasks with their next and last run', function () {
         'key' => sha1('report'),
         'command' => 'php artisan report',
         'description' => 'Report',
-        'expression' => '*/5 * * * *',
+        'schedules' => [['expression' => '*/5 * * * *', 'timezone' => 'UTC', 'repeat_seconds' => null]],
         'environments' => ['testing'],
         'stale' => false,
         'missed' => false,
@@ -121,10 +127,12 @@ it('counts a skip at or after the due time as satisfying it', function () {
     expect(scheduledTask('report')['missed'])->toBeTrue();
 });
 
-it('does not report tasks of other environments as missed', function () {
-    insertTask('report', attributes: ['environments' => '["production"]']);
+it('leaves out tasks that do not run in the current environment', function () {
+    insertTask('production', attributes: ['environments' => '["production"]']);
+    insertTask('testing', attributes: ['environments' => '["production","testing"]']);
+    insertTask('everywhere');
 
-    expect(scheduledTask('report')['missed'])->toBeFalse();
+    expect(app(ScheduleQueries::class)->tasks()->pluck('label')->all())->toBe(['everywhere', 'testing']);
 });
 
 it('computes the due time in the task timezone, across both repeated hours of a fall-back night', function () {
@@ -167,6 +175,17 @@ it('computes the next run and the due time of sub-minute tasks from their interv
     expect(scheduledTask('poll')['missed'])->toBeTrue();
 })->with(['mutable dates' => false, 'immutable dates' => true]);
 
+it('computes the next run and the due time over every schedule of a task', function () {
+    insertTask('sync', ['30 13 * * *', '0 12 * * *']);
+
+    expect(scheduledTask('sync')['next_run']->toDateTimeString())->toBe('2026-01-01 13:30:00')
+        // The 12:00 slot is due, the 13:30 one of yesterday is not the latest.
+        ->and(scheduledTask('sync')['missed'])->toBeTrue();
+
+    insertRun('sync', '2026-01-01 12:00:01');
+    expect(scheduledTask('sync')['missed'])->toBeFalse();
+});
+
 it('takes the last run of a sub-minute task from the task row when it is newer', function () {
     insertTask('poll', '* * * * *', ['repeat_seconds' => 10, 'last_run_at' => '2026-01-01 12:00:20.000', 'last_duration_ms' => 250]);
     insertRun('poll', '2026-01-01 11:00:00', 'failed');
@@ -189,8 +208,8 @@ it('detects stale tasks from the newest publication, even beyond the listed task
         DB::table(ScheduleModule::TASKS)->insert(array_map(fn (int $i) => [
             'key' => sha1("removed-{$i}"),
             'label' => sprintf('a-removed-%04d', $i),
-            'expression' => '* * * * *',
-            'timezone' => 'UTC',
+            'type' => 'closure',
+            'schedules' => '[{"expression":"* * * * *","timezone":"UTC","repeat_seconds":null}]',
             'first_seen_at' => '2025-01-01 00:00:00',
             'last_seen_at' => '2026-01-01 11:00:00',
         ], $chunk));

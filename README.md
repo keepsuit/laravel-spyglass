@@ -42,6 +42,8 @@ Spyglass never stores job payloads, query bindings or the driver message of quer
 - A task left out because the application was down is reported as missed when a task of the same tick brings the application back up.
 - Identical tasks sharing a mutex but writing to different output files can store each other's output.
 - The task list shows at most 1000 tasks.
+- Scheduled tasks with the same command, description or closure line share one row, as one task at several times. Jobs of the same class are told apart only by constructor arguments kept in a property of the same name, and objects only by their class.
+- The queue `Pending` card reads the backend now, cached for a few seconds: it has no history.
 - `Bus::batch()` on the `database` queue driver does not fire `JobQueued`, so the `queued` counter undercounts batched jobs there.
 - On SQLite, a worker timeout inside an open database transaction loses the counters of that attempt.
 - A worker started directly on the target of a queue forward (`Queue::forward('a', 'b')`, worker on `b`) counts the attempts under `b`, while `queued` is counted under `a`.

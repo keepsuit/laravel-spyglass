@@ -50,6 +50,16 @@ describe('Value', () => {
         expect(screen.queryByRole('link')).toBeNull();
     });
 
+    it('renders a label with its note and full name, and lines one per row', () => {
+        render(<Value field={field('label')} value={{ text: 'ReportJob', note: 'daily', title: 'App\\Jobs\\ReportJob' }} />);
+        expect(screen.getByText('daily').className).toContain('text-muted');
+        expect(screen.getByTitle('App\\Jobs\\ReportJob')).toBeTruthy();
+
+        cleanup();
+        render(<Value field={field('lines')} value={['30 13 * * *', '30 19 * * *']} compact />);
+        expect([...document.querySelectorAll('span.block > span')].map((line) => line.textContent)).toEqual(['30 13 * * *', '30 19 * * *']);
+    });
+
     it('renders json, decoded or not', () => {
         render(<Value field={field('json')} value={{ tenant: 'a' }} />);
         expect(document.querySelector('pre')?.textContent).toContain('"tenant": "a"');

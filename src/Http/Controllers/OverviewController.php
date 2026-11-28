@@ -81,7 +81,7 @@ class OverviewController extends Controller
             // Those needing attention first, then the latest run.
             $groups['schedule'] = Widget::group('schedule', 'Schedule', [
                 Widget::table('tasks', 'Tasks', [
-                    Widget::field('label', 'Task'),
+                    Widget::field('name', 'Task', 'label'),
                     Widget::field('last_status', 'Last run', 'status', ScheduleController::TONES),
                     Widget::field('recent', 'Recent runs', 'runs', ScheduleController::TONES),
                     Widget::field('last_started_at', 'Last started at', 'datetime'),

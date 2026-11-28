@@ -114,11 +114,13 @@ return new class extends Migration
         Schema::create('spyglass_schedule_tasks', function (Blueprint $table) {
             $table->char('key', 40)->primary();
             $table->string('label', 255);
+            $table->string('type', 16);
+            // Constructor arguments of a job.
+            $table->string('detail', 255)->nullable();
             $table->text('command')->nullable();
             $table->text('description')->nullable();
-            $table->text('expression');
-            $table->unsignedSmallInteger('repeat_seconds')->nullable();
-            $table->string('timezone', 64);
+            // One per time the task is registered at: {expression, timezone, repeat_seconds}.
+            $table->json('schedules');
             $table->json('environments')->nullable();
             $table->boolean('without_overlapping')->default(false);
             $table->dateTime('first_seen_at', 3);

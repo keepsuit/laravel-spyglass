@@ -47,9 +47,9 @@ class DatabaseSeeder extends Seeder
             DB::table('spyglass_schedule_tasks')->insert([
                 'key' => sha1($label),
                 'label' => $label,
+                'type' => str_contains($label, '/') ? 'closure' : 'command',
                 'command' => str_contains($label, '/') ? null : "php artisan {$label}",
-                'expression' => $expression,
-                'timezone' => 'Europe/Rome',
+                'schedules' => json_encode([['expression' => $expression, 'timezone' => 'Europe/Rome', 'repeat_seconds' => null]]),
                 'first_seen_at' => $this->at($this->now->copy()->subDays(20)),
                 'last_seen_at' => $this->at($this->now),
             ]);
