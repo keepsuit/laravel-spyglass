@@ -83,10 +83,10 @@ function apiFailJob(): string
     return app('queue.failer')->ids()[0];
 }
 
-function apiTask(string $label): void
+function apiTask(string $label, string $expression = '* * * * *'): void
 {
     DB::table(ScheduleModule::TASKS)->insert([
-        'key' => sha1($label), 'label' => $label, 'expression' => '* * * * *', 'timezone' => 'UTC',
+        'key' => sha1($label), 'label' => $label, 'type' => 'closure', 'schedules' => json_encode([['expression' => $expression, 'timezone' => 'UTC', 'repeat_seconds' => null]]),
         'first_seen_at' => '2025-01-01 00:00:00', 'last_seen_at' => '2026-01-01 12:00:00',
     ]);
 }
@@ -171,13 +171,11 @@ it('describes the overview of the enabled modules', function () {
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('inspire'), 'started_at' => '2026-03-01 12:00:00', 'status' => 'failed', 'host' => 'web-1',
     ]);
-    apiTask('archive');
-    DB::table(ScheduleModule::TASKS)->where('label', 'archive')->update(['expression' => '0 0 1 1 *']);
+    apiTask('archive', '0 0 1 1 *');
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('archive'), 'started_at' => '2026-01-01 00:00:00', 'status' => 'success', 'host' => 'web-1',
     ]);
-    apiTask('zeta');
-    DB::table(ScheduleModule::TASKS)->where('label', 'zeta')->update(['expression' => '20 12 * * *']);
+    apiTask('zeta', '20 12 * * *');
     DB::table(ScheduleModule::RUNS)->insert([
         'id' => (string) Str::ulid(), 'task' => sha1('zeta'), 'started_at' => '2026-03-01 12:20:00', 'status' => 'success', 'host' => 'web-1',
     ]);
@@ -206,11 +204,11 @@ it('describes the overview of the enabled modules', function () {
         ->and(apiWidget($page, 'unresolved')['rows'][0]['fingerprint'])->toBe(str_repeat('a', 40))
         ->and(apiWidget($page, 'failed_jobs'))->toMatchArray(['link' => 'queue/failed-jobs/{uuid}'])
         ->and(apiWidget($page, 'failed_jobs')['rows'][0]['uuid'])->toBe($uuid)
-        ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['label' => 'inspire', 'last_status' => 'failed'])
+        ->and(apiWidget($page, 'tasks')['rows'][0])->toMatchArray(['name' => ['text' => 'inspire', 'note' => null, 'title' => null], 'last_status' => 'failed'])
         ->and(array_column(apiWidget($page, 'latest_logs')['rows'], 'message'))->toBe(['Disk full'])
         ->and(apiWidget($page, 'logs')['widgets'][0])->toMatchArray(['key' => 'recorded', 'style' => 'bars'])
         // Those needing attention first, then by their latest run.
-        ->and(array_column(apiWidget($page, 'tasks')['rows'], 'label'))->toBe(['inspire', 'zeta', 'archive'])
+        ->and(array_column(array_column(apiWidget($page, 'tasks')['rows'], 'name'), 'text'))->toBe(['inspire', 'zeta', 'archive'])
         ->and(apiWidget($page, 'throughput')['type'])->toBe('series');
 
     // Every link and "more" leads to a page of the API.
@@ -266,7 +264,7 @@ it('describes the schedule', function () {
     $page = $this->getJson('/spyglass/api/schedule/'.sha1('inspire'))->assertOk()->json();
 
     expect($page['title'])->toBe('inspire')
-        ->and(apiItems($page, 'task')['expression'])->toBe('* * * * *')
+        ->and(apiItems($page, 'task')['schedule_lines'])->toBe(['* * * * * (UTC)'])
         ->and(apiWidget($page, 'runs'))->toMatchArray(['pagination' => ['page' => 1, 'per_page' => 25, 'has_more' => false, 'total' => null]])
         ->and(apiWidget($page, 'runs')['rows'][0])->toMatchArray([
             'status' => 'failed',
@@ -293,7 +291,9 @@ it('describes the queue', function () {
 
     $page = $this->getJson('/spyglass/api/queue?range=1h')->assertOk()->json();
 
-    expect(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
+    expect(apiWidgets($page)->pluck('label')->take(3)->all())->toBe(['Dispatched', 'Pending', 'Processed'])
+        ->and(apiWidget($page, 'pending')['value'])->toBe(0)
+        ->and(apiWidget($page, 'processed'))->toBe(['type' => 'metric', 'key' => 'processed', 'label' => 'Processed', 'value' => 6, 'filters' => ['range', 'queue', 'job']])
         // Every 5-minute bucket from 11:00 to 12:00, empty ones as zero.
         ->and(apiWidget($page, 'throughput'))->toMatchArray(['step' => 300])
         ->and(apiWidget($page, 'throughput')['points'])->toHaveCount(13)

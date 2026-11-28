@@ -7,6 +7,7 @@ use Carbon\CarbonInterface;
 use Closure;
 use Cron\CronExpression;
 use DateTimeZone;
+use Illuminate\Console\Application;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
@@ -17,6 +18,7 @@ use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event as Task;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
@@ -27,9 +29,11 @@ use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
 use Keepsuit\Spyglass\Support\Sources;
 use Keepsuit\Spyglass\Support\Text;
+use ReflectionClass;
 use ReflectionFunction;
 use RuntimeException;
 use Throwable;
+use UnitEnum;
 use WeakMap;
 
 /**
@@ -46,6 +50,9 @@ class ScheduleModule extends Module
     public const string RUNS = 'spyglass_schedule_runs';
 
     public const int OUTPUT_BYTES = 10240;
+
+    /** A namespaced class name, told by its shape: autoloading arbitrary strings may run code. */
+    protected const string CLASS_NAME = '/^\\\\?[A-Za-z_]\\w*(\\\\[A-Za-z_]\\w*)+$/';
 
     /** Hidden Context key carrying the run id to the `schedule:finish` process of a background task. */
     public const string CONTEXT_RUN = 'spyglass_schedule_run';
@@ -64,7 +71,7 @@ class ScheduleModule extends Module
     /** @var WeakMap<Task, string> latest run id of each task */
     protected WeakMap $current;
 
-    /** @var WeakMap<Task, array{key: string, label: string}> */
+    /** @var WeakMap<Task, array{key: string, label: string, type: string, detail: ?string}> */
     protected WeakMap $identities;
 
     /** @var array<string, array{reason: ?string, at: int}> last skip written per task key */
@@ -220,26 +227,128 @@ class ScheduleModule extends Module
     }
 
     /**
-     * Stable identities, aligned with `$tasks`. The key is a digest of the command or the description, never
-     * of the cron expression, so the history survives a frequency change, and of the position among tasks
-     * with the same identity. Closures without a description use `file:line`.
+     * The key digests the command or description and, for a job, its constructor arguments, never the cron
+     * expression: the history survives a frequency change and the same task registered at several times
+     * shares one row. Closures without a description use `file:line`. Never throws on odd jobs: the
+     * arguments are then left out.
      *
-     * @param  array<array-key, Task>  $tasks
-     * @return list<array{key: string, label: string}>
+     * @return array{key: string, label: string, type: 'job'|'closure'|'command'|'exec', detail: ?string}
      */
-    public static function identities(array $tasks): array
+    public static function identify(Task $task): array
     {
-        $seen = [];
+        $name = static::name($task);
+        $job = static::job($task);
+        $arguments = is_object($job) ? static::arguments($job) : [];
+        $artisan = Application::formatCommandString('');
 
-        return array_map(function (Task $task) use (&$seen) {
-            $identity = static::identity($task);
-            $ordinal = $seen[$identity] = ($seen[$identity] ?? 0) + 1;
+        [$type, $label] = match (true) {
+            $job !== null => ['job', preg_match(self::CLASS_NAME, $name) ? class_basename($name) : $name],
+            $task instanceof CallbackEvent => ['closure', $name],
+            is_string($task->command) && str_starts_with($task->command, $artisan) => ['command', Str::after($name, Task::normalizeCommand($artisan))],
+            default => ['exec', $name],
+        };
 
-            return [
-                'key' => sha1($ordinal.':'.$identity),
-                'label' => Text::clip($identity, 240).($ordinal > 1 ? " #{$ordinal}" : ''),
-            ];
-        }, array_values($tasks));
+        return [
+            'key' => sha1(implode("\0", [$name, ...array_column($arguments, 0)])),
+            'label' => Text::clip($label, 240),
+            'type' => $type,
+            'detail' => $arguments === [] ? null : Text::clip(implode(', ', array_column($arguments, 1)), 255),
+        ];
+    }
+
+    /**
+     * The job a `Schedule::job()` task dispatches, as given: a class name or an instance.
+     */
+    protected static function job(Task $task): object|string|null
+    {
+        if (! $task instanceof CallbackEvent) {
+            return null;
+        }
+
+        try {
+            $callback = (fn () => $this->callback)->call($task);
+
+            if (! $callback instanceof Closure) {
+                return null;
+            }
+
+            $function = new ReflectionFunction($callback);
+
+            // `Schedule::job()` wraps the job in a closure of its own.
+            if ($function->getClosureScopeClass()?->getName() !== Schedule::class) {
+                return null;
+            }
+
+            $job = $function->getClosureUsedVariables()['job'] ?? null;
+
+            return is_object($job) || is_string($job) ? $job : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Constructor arguments kept in a property of the same name, as [for the key, for display]. An object
+     * counts only by its class, so a value built at boot, such as a date, does not change the key.
+     *
+     * @return list<array{string, string}>
+     */
+    protected static function arguments(object $job): array
+    {
+        try {
+            $constructor = (new ReflectionClass($job))->getConstructor();
+        } catch (Throwable) {
+            return [];
+        }
+
+        if ($constructor === null) {
+            return [];
+        }
+
+        $class = $constructor->getDeclaringClass();
+        $arguments = [];
+
+        foreach ($constructor->getParameters() as $parameter) {
+            try {
+
+                if (! $class->hasProperty($parameter->getName())) {
+                    continue;
+                }
+
+                $property = $class->getProperty($parameter->getName());
+
+                if (! $property->isStatic() && $property->isInitialized($job)) {
+                    $arguments[] = static::argument($property->getValue($job));
+                }
+            } catch (Throwable) {
+                // Left out.
+            }
+        }
+
+        return $arguments;
+    }
+
+    /**
+     * @return array{string, string}
+     */
+    protected static function argument(mixed $value): array
+    {
+        return match (true) {
+            $value === null => ['null', 'null'],
+            is_bool($value) => [$value ? 'true' : 'false', $value ? 'true' : 'false'],
+            is_int($value), is_float($value) => [(string) $value, (string) $value],
+            is_string($value) => [$value, preg_match(self::CLASS_NAME, $value) ? class_basename($value) : Str::limit($value, 40)],
+            is_array($value) => ['array('.count($value).')', 'array('.count($value).')'],
+            $value instanceof UnitEnum => [$value::class.'::'.$value->name, class_basename($value).'::'.$value->name],
+            $value instanceof Model => [$value::class.'#'.static::scalar($value->getKey()), class_basename($value).'#'.static::scalar($value->getKey())],
+            is_object($value) => [$value::class, class_basename($value)],
+            default => [get_debug_type($value), get_debug_type($value)],
+        };
+    }
+
+    protected static function scalar(mixed $value): string
+    {
+        return is_scalar($value) ? (string) $value : '';
     }
 
     public static function timezone(Task $task): string
@@ -248,7 +357,7 @@ class ScheduleModule extends Module
         return $task->timezone instanceof DateTimeZone ? $task->timezone->getName() : ($task->timezone ?: date_default_timezone_get());
     }
 
-    protected static function identity(Task $task): string
+    protected static function name(Task $task): string
     {
         return match (true) {
             // Normalized: the command embeds the absolute PHP binary, which differs between hosts and upgrades.
@@ -305,16 +414,26 @@ class ScheduleModule extends Module
             }
 
             $rows = [];
+            $schedules = [];
 
             foreach ($tasks as $task) {
                 $identity = $this->identityOf($task);
+                $schedule = ['expression' => $task->getExpression(), 'timezone' => static::timezone($task), 'repeat_seconds' => $task->repeatSeconds];
+
+                // The same task at several times: one row, the rest of the attributes from the first.
+                if (isset($rows[$identity['key']])) {
+                    if (! in_array($schedule, $schedules[$identity['key']], true)) {
+                        $schedules[$identity['key']][] = $schedule;
+                    }
+
+                    continue;
+                }
+
+                $schedules[$identity['key']] = [$schedule];
                 $rows[$identity['key']] = [
                     ...$identity,
                     'command' => is_string($task->command) ? Task::normalizeCommand($task->command) : null,
                     'description' => is_string($task->description) ? $task->description : null,
-                    'expression' => $task->getExpression(),
-                    'repeat_seconds' => $task->repeatSeconds,
-                    'timezone' => static::timezone($task),
                     'environments' => $task->environments === [] ? null : json_encode(array_values($task->environments)),
                     'without_overlapping' => $task->withoutOverlapping,
                     'first_seen_at' => $seen,
@@ -324,9 +443,14 @@ class ScheduleModule extends Module
                 ];
             }
 
+            foreach ($rows as $key => &$row) {
+                $row['schedules'] = json_encode($schedules[$key]);
+            }
+            unset($row);
+
             // The same order in every process, so concurrent hosts lock rows in the same sequence.
             ksort($rows, SORT_STRING);
-            $update = ['label', 'command', 'description', 'expression', 'repeat_seconds', 'timezone', 'environments', 'without_overlapping', 'last_seen_at'];
+            $update = ['label', 'type', 'detail', 'command', 'description', 'schedules', 'environments', 'without_overlapping', 'last_seen_at'];
 
             // One statement per column shape: tasks skipped or run in this tick carry those columns too.
             $groups = [];
@@ -386,7 +510,8 @@ class ScheduleModule extends Module
             Spyglass::upsert(self::RUNS, ['id' => $id], $row);
         }
 
-        $label = $this->identityOf($task)['label'];
+        $identity = $this->identityOf($task);
+        $label = $identity['label'].($identity['detail'] === null ? '' : " ({$identity['detail']})");
         app(Sources::class)->enterTask($label, $id);
 
         // Laravel passes the Context to the process of a command, in the foreground too.
@@ -505,20 +630,11 @@ class ScheduleModule extends Module
     }
 
     /**
-     * @return array{key: string, label: string}
+     * @return array{key: string, label: string, type: string, detail: ?string}
      */
     protected function identityOf(Task $task): array
     {
-        if (! isset($this->identities[$task])) {
-            // Ordinals depend on the whole schedule. Tasks are only ever appended, so earlier ones keep theirs.
-            $tasks = array_values(app(Schedule::class)->events());
-
-            foreach (static::identities($tasks) as $i => $identity) {
-                $this->identities[$tasks[$i]] = $identity;
-            }
-        }
-
-        return $this->identities[$task] ?? static::identities([$task])[0];
+        return $this->identities[$task] ??= static::identify($task);
     }
 
     /**

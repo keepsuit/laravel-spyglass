@@ -51,6 +51,7 @@ class ScheduleQueries
             // Over every task: the newest publication may be beyond the listed ones.
             ->selectSub(fn (Builder $query) => $query->from(ScheduleModule::TASKS)->selectRaw('max(last_seen_at)'), 'newest')
             ->orderBy('label')
+            ->orderBy('detail')
             ->orderBy('key')
             ->limit(self::MAX_TASKS)
             ->get();
@@ -70,7 +71,13 @@ class ScheduleQueries
     protected function task(stdClass $task, array $runs, CarbonInterface $newest): array
     {
         [$lastRun, $previousRun] = [$runs[0] ?? null, $runs[1] ?? null];
-        $recent = $task->repeat_seconds !== null ? null : array_reverse(array_map(fn (array $run, int $i) => [
+        $schedules = array_map(fn (array $schedule) => [
+            'expression' => (string) $schedule['expression'],
+            'timezone' => (string) $schedule['timezone'],
+            'repeat_seconds' => isset($schedule['repeat_seconds']) ? (int) $schedule['repeat_seconds'] : null,
+        ], (array) json_decode($task->schedules, true));
+        $repeats = array_filter(array_column($schedules, 'repeat_seconds')) !== [];
+        $recent = $repeats ? null : array_reverse(array_map(fn (array $run, int $i) => [
             'status' => $this->status($run, superseded: (bool) $task->without_overlapping && $i > 0),
             'started_at' => $run['started_at'],
         ], $runs, array_keys($runs)));
@@ -99,11 +106,11 @@ class ScheduleQueries
         $task = [
             'key' => $task->key,
             'label' => $task->label,
+            'type' => $task->type,
+            'detail' => $task->detail,
             'command' => $task->command,
             'description' => $task->description,
-            'expression' => $task->expression,
-            'repeat_seconds' => $task->repeat_seconds === null ? null : (int) $task->repeat_seconds,
-            'timezone' => $task->timezone,
+            'schedules' => $schedules,
             'environments' => $task->environments === null ? [] : (array) json_decode($task->environments, true),
             'without_overlapping' => (bool) $task->without_overlapping,
             'first_seen_at' => $task->first_seen_at,
@@ -233,30 +240,48 @@ class ScheduleQueries
     }
 
     /**
+     * The nearest next run among the schedules of the task.
+     *
      * @param  array<string, mixed>  $task
      */
     protected function nextRun(array $task): ?CarbonInterface
     {
-        try {
-            $cron = new CronExpression($task['expression']);
-            $now = Date::now();
+        $next = null;
 
-            // Sub-minute tasks repeat from the start of every due minute.
-            if ($repeat = $task['repeat_seconds']) {
-                $minute = $now->copy()->setTimezone($task['timezone'])->startOfMinute();
-                $next = $minute->copy()->addSeconds((intdiv((int) $minute->diffInSeconds($now), $repeat) + 1) * $repeat);
+        foreach ($task['schedules'] as $schedule) {
+            try {
+                $run = $this->nextRunOf($schedule);
+            } catch (Throwable $e) {
+                $this->spyglass->report("Spyglass failed to compute the next run of [{$task['label']}]", $e);
 
-                if ($cron->isDue($minute, $task['timezone']) && $next->lt($minute->copy()->addMinute())) {
-                    return $next;
-                }
+                continue;
             }
 
-            return $this->existing($cron, $task['timezone'], fn (int $nth) => $cron->getNextRunDate($now, $nth, false, $task['timezone']));
-        } catch (Throwable $e) {
-            $this->spyglass->report("Spyglass failed to compute the next run of [{$task['label']}]", $e);
-
-            return null;
+            $next = $next === null || $run->lt($next) ? $run : $next;
         }
+
+        return $next;
+    }
+
+    /**
+     * @param  array{expression: string, timezone: string, repeat_seconds: ?int}  $schedule
+     */
+    protected function nextRunOf(array $schedule): CarbonInterface
+    {
+        $cron = new CronExpression($schedule['expression']);
+        $now = Date::now();
+
+        // Sub-minute tasks repeat from the start of every due minute.
+        if ($repeat = $schedule['repeat_seconds']) {
+            $minute = $now->copy()->setTimezone($schedule['timezone'])->startOfMinute();
+            $next = $minute->copy()->addSeconds((intdiv((int) $minute->diffInSeconds($now), $repeat) + 1) * $repeat);
+
+            if ($cron->isDue($minute, $schedule['timezone']) && $next->lt($minute->copy()->addMinute())) {
+                return $next;
+            }
+        }
+
+        return $this->existing($cron, $schedule['timezone'], fn (int $nth) => $cron->getNextRunDate($now, $nth, false, $schedule['timezone']));
     }
 
     /**
@@ -269,18 +294,29 @@ class ScheduleQueries
             return false;
         }
 
-        try {
-            $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
-            $cron = new CronExpression($task['expression']);
-            $slot = $this->existing($cron, $task['timezone'], fn (int $nth) => $cron->getPreviousRunDate($due, $nth, true, $task['timezone']));
-        } catch (Throwable $e) {
-            $this->spyglass->report("Spyglass failed to compute the due time of [{$task['label']}]", $e);
+        $due = Date::now()->subSeconds((int) config('spyglass.modules.schedule.missed_after', 90));
+        $slot = null;
 
-            return false;
+        // The latest due slot among the schedules.
+        foreach ($task['schedules'] as $schedule) {
+            try {
+                $cron = new CronExpression($schedule['expression']);
+                $latest = $this->existing($cron, $schedule['timezone'], fn (int $nth) => $cron->getPreviousRunDate($due, $nth, true, $schedule['timezone']));
+            } catch (Throwable $e) {
+                $this->spyglass->report("Spyglass failed to compute the due time of [{$task['label']}]", $e);
+
+                continue;
+            }
+
+            if ($repeat = $schedule['repeat_seconds']) {
+                $latest = $latest->addSeconds(min(intdiv((int) $latest->diffInSeconds($due), $repeat), intdiv(59, $repeat)) * $repeat);
+            }
+
+            $slot = $slot === null || $latest->gt($slot) ? $latest : $slot;
         }
 
-        if ($repeat = $task['repeat_seconds']) {
-            $slot = $slot->addSeconds(min(intdiv((int) $slot->diffInSeconds($due), $repeat), intdiv(59, $repeat)) * $repeat);
+        if ($slot === null) {
+            return false;
         }
 
         $satisfied = array_filter([$task['last_run']['started_at'] ?? null, $task['last_skipped_at']]);

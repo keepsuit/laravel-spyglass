@@ -21,7 +21,7 @@ class QueueController extends Controller
     /** Chart buckets by range, in seconds: whole stored 5-minute buckets, a few hundred points at most. */
     protected const array STEPS = ['1h' => 300, '24h' => 300, '7d' => 1800];
 
-    public const array COUNTERS = ['processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out', 'queued' => 'Queued'];
+    public const array COUNTERS = ['queued' => 'Dispatched', 'processed' => 'Processed', 'failed' => 'Failed', 'released' => 'Released', 'timed_out' => 'Timed out'];
 
     protected const string MISSING = 'Already retried or removed.';
 
@@ -51,19 +51,26 @@ class QueueController extends Controller
         $failed = $this->queries->failedJobs($failedBy, page: $page);
 
         $counters = array_map(fn ($key, $label) => ['key' => $key, 'label' => $label], array_keys(self::COUNTERS), self::COUNTERS);
+        $metrics = array_map(fn (array $counter) => Widget::metric($counter['key'], $counter['label'], $totals[$counter['key']] ?? 0, $aggregateFilters), $counters);
+        $sizes = $this->queries->sizes(now()->subDay());
+        $pending = $sizes->pluck('pending')->filter(fn (?int $size) => $size !== null);
 
         return Widget::page('Queue', [
-            ...array_map(fn (array $counter) => Widget::metric($counter['key'], $counter['label'], $totals[$counter['key']] ?? 0, $aggregateFilters), $counters),
+            $metrics[0],
+            // Across every queue, now: the backend reports no history.
+            Widget::metric('pending', 'Pending', $pending->isEmpty() ? null : $pending->sum()),
+            ...array_slice($metrics, 1),
             Widget::metric('duration_avg', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration'),
             Widget::metric('duration_max', 'Max duration', self::maxDuration($totals), $aggregateFilters, format: 'duration'),
-            self::chart($this->queries->series($from, $to, [], $aggregateBy), $from, self::STEPS[$range], array_keys(self::COUNTERS), $aggregateFilters),
+            // Dispatched last: series colors go by position and must match the overview chart.
+            self::chart($this->queries->series($from, $to, [], $aggregateBy), $from, self::STEPS[$range], ['processed', 'failed', 'released', 'timed_out', 'queued'], $aggregateFilters),
             Widget::table('sizes', 'Queues', [
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
                 Widget::field('pending', 'Pending', 'number'),
                 Widget::field('reserved', 'Running', 'number'),
                 Widget::field('delayed', 'Delayed', 'number'),
-            ], $this->queries->sizes(now()->subDay())->filter(fn (array $size) => ! isset($filters['queue']) || $size['queue'] === $filters['queue']), filters: ['queue']),
+            ], $sizes->filter(fn (array $size) => ! isset($filters['queue']) || $size['queue'] === $filters['queue']), filters: ['queue']),
             Widget::table('jobs', 'Jobs', [
                 Widget::field('job', 'Job'),
                 Widget::field('connection', 'Connection'),

@@ -26,8 +26,9 @@ class ScheduleController extends Controller
     {
         return Widget::page('Schedule', [
             Widget::table('tasks', 'Tasks', [
-                Widget::field('label', 'Task'),
-                Widget::field('expression', 'Expression'),
+                Widget::field('name', 'Task', 'label'),
+                Widget::field('type', 'Type', 'status'),
+                Widget::field('expressions', 'Expression', 'lines'),
                 Widget::field('last_status', 'Last run', 'status', self::TONES),
                 Widget::field('recent', 'Recent runs', 'runs', self::TONES),
                 Widget::field('last_started_at', 'Last started at', 'datetime'),
@@ -51,14 +52,14 @@ class ScheduleController extends Controller
 
         $runs = $this->queries->runs($task, page: $page);
 
-        return Widget::page($details['label'], [
+        return Widget::page($details['label'].($details['detail'] === null ? '' : " ({$details['detail']})"), [
             Widget::details('task', 'Task', [
                 Widget::field('label', 'Task'),
+                Widget::field('type', 'Type', 'status'),
+                Widget::field('detail', 'Arguments'),
                 Widget::field('command', 'Command'),
                 Widget::field('description', 'Description'),
-                Widget::field('expression', 'Expression'),
-                Widget::field('repeat_seconds', 'Repeats every (s)', 'number'),
-                Widget::field('timezone', 'Timezone'),
+                Widget::field('schedule_lines', 'Schedule', 'lines'),
                 Widget::field('environments', 'Environments', 'json'),
                 Widget::field('without_overlapping', 'Without overlapping', 'boolean'),
                 Widget::field('next_run', 'Next run', 'datetime'),
@@ -96,11 +97,25 @@ class ScheduleController extends Controller
         $run = $task['last_run'] ?? [];
         unset($task['last_run']);
 
+        /** @var list<array{expression: string, timezone: string, repeat_seconds: ?int}> $schedules as `ScheduleQueries::tasks()` */
+        $schedules = $task['schedules'] ?? [];
+
         return [
             ...$task,
+            'name' => ['text' => $task['label'], 'note' => $task['detail'] ?? null, 'title' => $task['description'] ?? $task['command'] ?? null],
+            'expressions' => array_map(self::expression(...), $schedules),
+            'schedule_lines' => array_map(fn (array $schedule) => self::expression($schedule)." ({$schedule['timezone']})", $schedules),
             'last_status' => $run['status'] ?? null,
             'last_started_at' => $run['started_at'] ?? null,
             'last_duration_ms' => $run['duration_ms'] ?? null,
         ];
+    }
+
+    /**
+     * @param  array{expression: string, repeat_seconds: ?int}  $schedule
+     */
+    protected static function expression(array $schedule): string
+    {
+        return $schedule['expression'].($schedule['repeat_seconds'] ? " every {$schedule['repeat_seconds']}s" : '');
     }
 }

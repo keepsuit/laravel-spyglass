@@ -11,6 +11,8 @@ use Illuminate\Console\Scheduling\EventMutex;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Console\Scheduling\ScheduledTaskSkipReason;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Log\Context\Repository as ContextRepository;
 use Illuminate\Support\Carbon;
@@ -22,6 +24,7 @@ use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Support\ExceptionFingerprint;
+use Keepsuit\Spyglass\Tests\Fixtures\QueueJob;
 use Keepsuit\Spyglass\Tests\Fixtures\WithScheduleModule;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\NullOutput;
@@ -46,9 +49,7 @@ function scheduleTask(Event $task): ?object
 
 function taskKey(Event $task): string
 {
-    $tasks = array_values(app(Schedule::class)->events());
-
-    return ScheduleModule::identities($tasks)[array_search($task, $tasks, true)]['key'];
+    return ScheduleModule::identify($task)['key'];
 }
 
 /**
@@ -130,19 +131,18 @@ it('publishes the schedule on every run, keeping when each task was first seen',
     $this->artisan('schedule:run');
 
     expect((array) scheduleTask($task))->toMatchArray([
-        'label' => 'php artisan spyglass:test',
+        'label' => 'spyglass:test',
+        'type' => 'command',
         'command' => 'php artisan spyglass:test',
         'description' => 'Test',
-        'expression' => '* * * * *',
-        'repeat_seconds' => 10,
-        'timezone' => 'UTC',
         'environments' => '["production"]',
         'last_skipped_at' => null,
     ])
+        ->and(json_decode(scheduleTask($task)->schedules, true))->toBe([['expression' => '* * * * *', 'timezone' => 'UTC', 'repeat_seconds' => 10]])
         ->and((bool) scheduleTask($task)->without_overlapping)->toBeFalse()
         ->and(substr(scheduleTask($task)->first_seen_at, 11, 5))->toBe('12:00')
         ->and(substr(scheduleTask($task)->last_seen_at, 11, 5))->toBe('12:01')
-        ->and(DB::table(ScheduleModule::TASKS)->where('label', 'closure')->value('timezone'))->toBe('Europe/Rome');
+        ->and(json_decode(DB::table(ScheduleModule::TASKS)->where('label', 'closure')->value('schedules'), true)[0]['timezone'])->toBe('Europe/Rome');
 });
 
 it('publishes whether a task prevents overlaps', function () {
@@ -158,7 +158,7 @@ it('publishes long cron expressions in full', function () {
 
     publishSchedule();
 
-    expect(scheduleTask($task)->expression)->toBe($expression);
+    expect(json_decode(scheduleTask($task)->schedules, true)[0]['expression'])->toBe($expression);
 });
 
 it('publishes the schedule in a single statement', function () {
@@ -615,11 +615,11 @@ it('stores the tail of a long output as valid UTF-8', function () {
 it('keys a task by its command or description, not by its cron expression', function () {
     $hourly = (new Schedule)->command('spyglass:test --flag')->hourly();
     $daily = (new Schedule)->command('spyglass:test --flag')->daily();
-    $named = (new Schedule)->job('App\Jobs\Report')->daily();
 
-    expect(ScheduleModule::identities([$hourly]))->toBe([['key' => sha1('1:php artisan spyglass:test --flag'), 'label' => 'php artisan spyglass:test --flag']])
-        ->and(ScheduleModule::identities([$daily]))->toBe(ScheduleModule::identities([$hourly]))
-        ->and(ScheduleModule::identities([$named])[0]['label'])->toBe('App\Jobs\Report');
+    expect(ScheduleModule::identify($hourly))->toBe(['key' => sha1('php artisan spyglass:test --flag'), 'label' => 'spyglass:test --flag', 'type' => 'command', 'detail' => null])
+        ->and(ScheduleModule::identify($daily))->toBe(ScheduleModule::identify($hourly))
+        ->and(ScheduleModule::identify((new Schedule)->exec('node script.js')))->toMatchArray(['label' => 'node script.js', 'type' => 'exec'])
+        ->and(ScheduleModule::identify((new Schedule)->job('App\Jobs\Report')))->toMatchArray(['key' => sha1('App\Jobs\Report'), 'label' => 'Report', 'type' => 'job', 'detail' => null]);
 });
 
 it('labels a closure by its file and line relative to the base path', function () {
@@ -629,39 +629,71 @@ it('labels a closure by its file and line relative to the base path', function (
     $line = __LINE__ - 1;
     $named = (new Schedule)->call(fn () => null)->name('named');
 
-    expect(array_column(ScheduleModule::identities([$closure, $named]), 'label'))->toBe(['tests/ScheduleModuleTest.php:'.$line, 'named']);
+    expect(ScheduleModule::identify($closure))->toMatchArray(['label' => 'tests/ScheduleModuleTest.php:'.$line, 'type' => 'closure'])
+        ->and(ScheduleModule::identify($named))->toMatchArray(['label' => 'named', 'type' => 'closure']);
 });
 
-it('keys duplicates by position, apart from tasks whose name looks like a duplicate', function () {
+it('tells jobs apart by their constructor arguments', function () {
     $schedule = new Schedule;
-    $schedule->command('spyglass:test')->hourly();
-    $schedule->call(fn () => null)->name('php artisan spyglass:test #2');
-    $schedule->command('spyglass:test')->daily();
+    $products = ScheduleModule::identify($schedule->job(new QueueJob(ScheduleModule::class))->daily());
+    $brands = ScheduleModule::identify($schedule->job(new QueueJob('brands', 'Brands'))->daily());
+    $again = ScheduleModule::identify($schedule->job(new QueueJob(ScheduleModule::class))->hourly());
 
-    $identities = ScheduleModule::identities($schedule->events());
+    expect($products)->toMatchArray(['label' => 'QueueJob', 'type' => 'job', 'detail' => 'ScheduleModule, null'])
+        ->and($brands)->toMatchArray(['label' => 'Brands', 'detail' => 'brands, Brands'])
+        ->and($brands['key'])->not->toBe($products['key'])
+        ->and($again['key'])->toBe($products['key']);
+});
 
-    expect(array_column($identities, 'label'))->toBe(['php artisan spyglass:test', 'php artisan spyglass:test #2', 'php artisan spyglass:test #2'])
-        ->and(array_unique(array_column($identities, 'key')))->toHaveCount(3);
+it('leaves out the constructor arguments it cannot read', function () {
+    $broken = new class extends Model
+    {
+        public function getKey(): never
+        {
+            throw new RuntimeException('Broken');
+        }
+    };
+    $job = new class($broken, 'kept') implements ShouldQueue
+    {
+        public string $missing;
+
+        public function __construct(public object $broken, public string $kept, string $missing = '') {}
+    };
+
+    expect(ScheduleModule::identify((new Schedule)->job($job)))->toMatchArray(['type' => 'job', 'detail' => 'kept']);
+});
+
+it('publishes a task registered at several times as one row', function () {
+    $first = app(Schedule::class)->job(new QueueJob)->dailyAt('13:30');
+    app(Schedule::class)->job(new QueueJob)->dailyAt('19:30')->timezone('Europe/Rome');
+    app(Schedule::class)->job(new QueueJob('other'))->dailyAt('19:30');
+
+    publishSchedule();
+
+    expect(DB::table(ScheduleModule::TASKS)->where('type', 'job')->count())->toBe(2)
+        ->and(json_decode(scheduleTask($first)->schedules, true))->toBe([
+            ['expression' => '30 13 * * *', 'timezone' => 'UTC', 'repeat_seconds' => null],
+            ['expression' => '30 19 * * *', 'timezone' => 'Europe/Rome', 'repeat_seconds' => null],
+        ]);
 });
 
 it('keys long identities in full', function () {
     $prefix = str_repeat('a', 300);
 
-    $identities = ScheduleModule::identities([(new Schedule)->exec("{$prefix} 1"), (new Schedule)->exec("{$prefix} 2")]);
+    $identity = ScheduleModule::identify((new Schedule)->exec("{$prefix} 2"));
 
-    expect($identities[1]['key'])->toBe(sha1("1:{$prefix} 2"))
-        ->and(mb_strlen($identities[0]['label']))->toBeLessThanOrEqual(255);
+    expect($identity['key'])->toBe(sha1("{$prefix} 2"))
+        ->and(mb_strlen($identity['label']))->toBeLessThanOrEqual(255);
 });
 
-it('records runs under the keys published with the schedule', function () {
+it('records runs of the same task at several times under one key', function () {
     $first = app(Schedule::class)->exec('true')->everyMinute();
-    $second = app(Schedule::class)->exec('true')->everyMinute();
+    app(Schedule::class)->exec('true')->everyMinute();
 
     $this->artisan('schedule:run');
 
-    expect(scheduleRuns()->pluck('task')->sort()->values()->all())->toBe(collect([taskKey($first), taskKey($second)])->sort()->values()->all())
-        ->and(scheduleTask($first)->label)->toBe('true')
-        ->and(scheduleTask($second)->label)->toBe('true #2');
+    expect(scheduleRuns()->pluck('task')->all())->toBe([taskKey($first), taskKey($first)])
+        ->and(scheduleTask($first)->label)->toBe('true');
 });
 
 it('keeps only the newest runs of each task by outcome', function () {

@@ -125,6 +125,25 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
                 <span className="break-words">{breakable(link.label)}</span>
             );
         }
+        case 'label': {
+            const label = value as { text: string; note: string | null; title: string | null };
+            return (
+                <span title={label.title ?? undefined} className="break-words">
+                    {breakable(label.text)}
+                    {label.note && <span className="ml-1.5 text-muted">{label.note}</span>}
+                </span>
+            );
+        }
+        case 'lines':
+            return (
+                <span className="block whitespace-nowrap">
+                    {(value as string[]).map((line, index) => (
+                        <span key={index} className="block">
+                            {line}
+                        </span>
+                    ))}
+                </span>
+            );
         case 'json': {
             const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
             const block = <pre className={pre}>{text}</pre>;
