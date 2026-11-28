@@ -447,7 +447,9 @@ it('shows an exception group with its sources and occurrences', function () {
 
     expect(apiWidget($page, 'group')['actions'])->toBe([['key' => 'resolve', 'label' => 'Resolve', 'url' => "exceptions/{$fingerprint}/resolve"]])
         ->and(apiWidget($page, 'sources')['rows'][0])->toMatchArray(['source_type' => 'job', 'source' => 'A', 'count' => 3])
-        ->and(apiWidget($page, 'occurrences')['rows'][0]['trace'])->toBe([['file' => 'app/Foo.php', 'line' => 12, 'function' => 'handle']]);
+        ->and(apiWidget($page, 'occurrences')['rows'][0]['trace'])->toBe([['file' => 'app/Foo.php', 'line' => 12, 'function' => 'handle']])
+        ->and(array_column(apiWidget($page, 'occurrences')['columns'], 'key'))->not->toContain('context', 'trace')
+        ->and(array_column(apiWidget($page, 'occurrences')['expand'], 'key'))->toBe(['context', 'trace']);
 
     $this->getJson('/spyglass/api/exceptions/'.str_repeat('f', 40))->assertNotFound();
 });

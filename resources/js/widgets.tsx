@@ -6,7 +6,7 @@ import { scaleLinear } from '@tanstack/charts/scales/linear';
 import { scaleOrdinal } from '@tanstack/charts/scales/ordinal';
 import { scaleUtc } from '@tanstack/charts/scales/time';
 import { tooltip } from '@tanstack/charts/tooltip';
-import { createContext, useContext, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import {
     api,
     fill,
@@ -324,6 +324,9 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
     const descending = column.startsWith('-');
     // A paginated table comes sorted from the server.
     const rows = sorted && !widget.pagination ? sortRows(widget.rows, sorted.key, descending) : widget.rows;
+    const [opened, setOpened] = useState<Set<number>>(new Set());
+    const toggle = (index: number) => setOpened((current) => new Set(current.has(index) ? [...current].filter((item) => item !== index) : [...current, index]));
+    const span = widget.columns.length + (widget.actions.length > 0 ? 1 : 0) + (widget.expand ? 1 : 0);
     const sortBy = (field: Field) =>
         setParams({ sort: `${widget.key}:${(sorted === field ? !descending : descendingFirst(field)) ? '-' : ''}${field.key}` });
     // Half a row is narrow: closer columns, the same outer edges.
@@ -332,10 +335,11 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
     const current = page ?? pagination?.page ?? 1;
     const pages = pagination?.total != null ? Math.max(1, Math.ceil(pagination.total / pagination.per_page)) : null;
 
-    const open = (event: MouseEvent, row: Row) => {
-        if (!link || (event.target as Element).closest('a, button, summary, pre')) return;
+    const open = (event: MouseEvent, row: Row, index: number) => {
+        if ((!link && !widget.expand) || (event.target as Element).closest('a, button, summary, pre')) return;
         if (window.getSelection()?.toString()) return;
-        navigate(href(fill(link, row)));
+        if (link) navigate(href(fill(link, row)));
+        else toggle(index);
     };
 
     return (
@@ -377,38 +381,69 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                                         <span className="sr-only">Actions</span>
                                     </th>
                                 )}
+                                {widget.expand && (
+                                    <th scope="col">
+                                        <span className="sr-only">Details</span>
+                                    </th>
+                                )}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
                             {rows.map((row, index) => (
-                                <tr
-                                    key={link ? fill(link, row) : index}
-                                    onClick={(event) => open(event, row)}
-                                    className={`align-top transition-colors duration-150 ${link ? 'cursor-pointer hover:bg-bg/70' : ''}`}
-                                >
-                                    {widget.columns.map((column, columnIndex) => (
-                                        <td
-                                            key={column.key}
-                                            // Read only on a phone, where each row is a list of label and value.
-                                            data-label={columnIndex > 0 ? column.label : undefined}
-                                            data-empty={[null, undefined, ''].includes(row[column.key] as never) || undefined}
-                                            className={`${cellX} py-2.5 ${alignRight(column) ? 'text-right' : ''}`}
-                                        >
-                                            {link && columnIndex === 0 && column.type !== 'link' ? (
-                                                <Link to={fill(link, row)} className="font-medium">
+                                <Fragment key={link ? fill(link, row) : index}>
+                                    <tr
+                                        onClick={(event) => open(event, row, index)}
+                                        className={`align-top transition-colors duration-150 ${link || widget.expand ? 'cursor-pointer hover:bg-bg/70' : ''}`}
+                                    >
+                                        {widget.columns.map((column, columnIndex) => (
+                                            <td
+                                                key={column.key}
+                                                // Read only on a phone, where each row is a list of label and value.
+                                                data-label={columnIndex > 0 ? column.label : undefined}
+                                                data-empty={[null, undefined, ''].includes(row[column.key] as never) || undefined}
+                                                className={`${cellX} py-2.5 ${alignRight(column) ? 'text-right' : ''}`}
+                                            >
+                                                {link && columnIndex === 0 && column.type !== 'link' ? (
+                                                    <Link to={fill(link, row)} className="font-medium">
+                                                        <Value field={column} value={row[column.key]} compact />
+                                                    </Link>
+                                                ) : (
                                                     <Value field={column} value={row[column.key]} compact />
-                                                </Link>
-                                            ) : (
-                                                <Value field={column} value={row[column.key]} compact />
-                                            )}
-                                        </td>
-                                    ))}
-                                    {widget.actions.length > 0 && (
-                                        <td className="px-4 py-2">
-                                            <Actions actions={widget.actions} row={row} />
-                                        </td>
+                                                )}
+                                            </td>
+                                        ))}
+                                        {widget.actions.length > 0 && (
+                                            <td className="px-4 py-2">
+                                                <Actions actions={widget.actions} row={row} />
+                                            </td>
+                                        )}
+                                        {widget.expand && (
+                                            <td className="px-4 py-2 text-right">
+                                                <button type="button" aria-expanded={opened.has(index)} aria-label="Details" onClick={() => toggle(index)} className="btn btn-icon">
+                                                    <span aria-hidden className={`transition-transform duration-150 ${opened.has(index) ? 'rotate-180' : ''}`}>
+                                                        ▾
+                                                    </span>
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                    {widget.expand && opened.has(index) && (
+                                        <tr className="bg-bg/50">
+                                            <td colSpan={span} className="px-4 py-4">
+                                                <dl className="grid w-full gap-x-8 gap-y-3 sm:grid-cols-[minmax(6rem,max-content)_minmax(0,1fr)]">
+                                                    {widget.expand.map((field) => (
+                                                        <div key={field.key} className="contents">
+                                                            <dt className="text-muted">{field.label}</dt>
+                                                            <dd className="min-w-0 max-sm:mb-2">
+                                                                <Value field={field} value={row[field.key]} />
+                                                            </dd>
+                                                        </div>
+                                                    ))}
+                                                </dl>
+                                            </td>
+                                        </tr>
                                     )}
-                                </tr>
+                                </Fragment>
                             ))}
                         </tbody>
                     </table>

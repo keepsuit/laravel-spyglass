@@ -64,9 +64,10 @@ final class Widget
 
     /**
      * `$more` leads to the full list of a shortened table, `$empty` replaces the generic text of an empty one,
-     * and `$width` `half` lets two tables share a row.
+     * and `$width` `half` lets two tables share a row. `$expand` fields are shown under a row the user opens.
      *
      * @param  list<Field>  $columns
+     * @param  list<Field>  $expand
      * @param  iterable<array<string, mixed>>  $rows
      * @param  Paginator<int, mixed>|null  $paginator
      * @param  list<Action>  $actions
@@ -85,6 +86,7 @@ final class Widget
         ?string $more = null,
         ?string $empty = null,
         ?string $width = null,
+        array $expand = [],
     ): array {
         // Row values the templates need, shown or not.
         preg_match_all('/\{(\w+)\}/', $link.implode(' ', array_column($actions, 'url')), $placeholders);
@@ -94,7 +96,7 @@ final class Widget
             'key' => $key,
             'label' => $label,
             'columns' => $columns,
-            'rows' => self::rows($columns, $rows, $placeholders[1]),
+            'rows' => self::rows([...$columns, ...$expand], $rows, $placeholders[1]),
             'pagination' => $paginator === null ? null : [
                 'page' => $paginator->currentPage(),
                 'per_page' => $paginator->perPage(),
@@ -104,7 +106,7 @@ final class Widget
             'link' => $link,
             'actions' => $actions,
             'filters' => $filters,
-            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width], fn ($option) => $option !== null),
+            ...array_filter(['more' => $more, 'empty' => $empty, 'width' => $width, 'expand' => $expand ?: null], fn ($option) => $option !== null),
         ];
     }
 

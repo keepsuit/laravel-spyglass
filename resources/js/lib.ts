@@ -39,6 +39,7 @@ export type TableWidget = {
     more?: string;
     empty?: string;
     width?: 'half';
+    expand?: Field[];
 };
 export type SeriesWidget = {
     type: 'series';

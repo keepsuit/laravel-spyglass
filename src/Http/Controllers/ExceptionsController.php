@@ -109,9 +109,10 @@ class ExceptionsController extends Controller
                 Widget::field('source', 'Source'),
                 Widget::field('user_id', 'User'),
                 Widget::field('scope_label', 'Scope'),
+            ], $this->rows($occurrences->items()), $occurrences, expand: [
                 Widget::field('context', 'Context', 'json'),
                 Widget::field('trace', 'Trace', 'json'),
-            ], $this->rows($occurrences->items()), $occurrences),
+            ]),
         ]);
     }
 

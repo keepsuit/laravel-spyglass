@@ -130,6 +130,25 @@ describe('Table', () => {
         expect(new URLSearchParams(window.location.search).get('sort')).toBe('jobs:-failed');
     });
 
+    it('opens the expanded fields of a row under it', () => {
+        const occurrences: TableWidget = {
+            ...table,
+            columns: [{ key: 'message', label: 'Message', type: 'text' }],
+            rows: [{ message: 'Boom', trace: [{ file: 'app/Foo.php', line: 3 }] }],
+            link: null,
+            actions: [],
+            expand: [{ key: 'trace', label: 'Trace', type: 'json' }],
+        };
+        wrap(<Table widget={occurrences} ignored={[]} filtered={false} page={null} />);
+
+        expect(screen.queryByText('Trace')).toBeNull();
+        fireEvent.click(screen.getByText('Boom'));
+        expect(screen.getByText('Trace')).toBeTruthy();
+        expect(document.querySelector('pre')?.textContent).toContain('app/Foo.php');
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        expect(screen.queryByText('Trace')).toBeNull();
+    });
+
     it('explains an empty table', () => {
         wrap(<Table widget={{ ...table, rows: [], pagination: null }} ignored={[]} filtered={false} page={null} />);
         expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
