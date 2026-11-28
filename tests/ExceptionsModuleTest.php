@@ -470,6 +470,29 @@ it('stores the current scope of a job that reports after switching tenant', func
     expect(exceptionOccurrences()[0])->toMatchArray(['source_type' => 'job', 'scope' => 'tenant:other']);
 });
 
+it('locates an exception thrown in a queued closure at its line, one group per closure', function () {
+    app()->setBasePath(dirname(__DIR__));
+
+    dispatch(function () {
+        throw new LogicException('First');
+    });
+    $first = __LINE__ - 2;
+    dispatch(function () {
+        throw new LogicException('Second');
+    });
+    $second = __LINE__ - 2;
+
+    foreach ([1, 2] as $attempt) {
+        Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--sleep' => 0]);
+    }
+    SpyglassFacade::flush();
+
+    expect(exceptionGroupsTable()->orderBy('line')->get()->map(fn (object $group) => ['file' => $group->file, 'line' => (int) $group->line])->all())->toBe([
+        ['file' => 'tests/ExceptionsModuleTest.php', 'line' => $first],
+        ['file' => 'tests/ExceptionsModuleTest.php', 'line' => $second],
+    ]);
+});
+
 it('names the job after its class, not a display name that can embed ids', function () {
     QueueJob::dispatch('throw', 'Order #12');
     $uuid = json_decode(DB::table('jobs')->value('payload'), true)['uuid'];

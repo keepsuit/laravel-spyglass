@@ -5,6 +5,7 @@ namespace Keepsuit\Spyglass\Support;
 use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
+use Illuminate\Queue\CallQueuedClosure;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessing;
@@ -13,9 +14,11 @@ use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Keepsuit\Spyglass\Facades\Spyglass;
 use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use ReflectionFunction;
 use stdClass;
 use Symfony\Component\Console\Input\ArgvInput;
 use Throwable;
@@ -38,12 +41,29 @@ final class Sources
     /** Hidden Context key carrying the source of a scheduled task to its background process. */
     public const string CONTEXT_SOURCE = 'spyglass_source';
 
+    /** Payload key with the file and first line of a queued closure: the worker runs it from rebuilt code. */
+    public const string PAYLOAD_CLOSURE = 'spyglassClosure';
+
     /**
      * The job being processed by a worker, with the Context captured before tenancy can revert it.
      *
      * @var array{source_type: string, source: string, source_id: ?string, scope: ?string, context: ?string}|null
      */
     private ?array $job = null;
+
+    /**
+     * File and first line of the queued closure being processed by a worker.
+     *
+     * @var array{string, int}|null
+     */
+    private ?array $closure = null;
+
+    /**
+     * The queued closure each exception was thrown by, for reports after the attempt.
+     *
+     * @var WeakMap<Throwable, array{string, int}>
+     */
+    private WeakMap $closures;
 
     /**
      * The scheduled task running in this process.
@@ -62,29 +82,61 @@ final class Sources
     public function __construct()
     {
         $this->thrown = new WeakMap;
+        $this->closures = new WeakMap;
     }
 
     public function register(): void
     {
+        Queue::createPayloadUsing(static function (?string $connection, ?string $queue, array $payload): array {
+            $command = $payload['data']['command'] ?? null;
+
+            // Guarded: it runs inside the application's dispatch.
+            try {
+                $closure = $command instanceof CallQueuedClosure ? new ReflectionFunction($command->closure->getClosure()) : null;
+                $file = $closure === null ? null : ExceptionFingerprint::applicationPath((string) $closure->getFileName());
+            } catch (Throwable) {
+                return [];
+            }
+
+            return $file === null ? [] : [self::PAYLOAD_CLOSURE => [$file, $closure->getStartLine()]];
+        });
+
         // Sync jobs run inside the dispatching request or command, which is their source.
         Event::listen(JobProcessing::class, function (JobProcessing $event) {
             if (! $event->job instanceof SyncJob) {
+                $closure = $event->job->payload()[self::PAYLOAD_CLOSURE] ?? null;
+                $this->closure = is_array($closure) && is_string($closure[0] ?? null) && is_int($closure[1] ?? null) ? [$closure[0], $closure[1]] : null;
                 $this->job = ['source_type' => 'job', 'source' => JobName::from($event->job->payload()), 'source_id' => $event->job->uuid(), ...Spyglass::captureContext()];
             }
         });
         Event::listen(JobExceptionOccurred::class, function (JobExceptionOccurred $event) {
             if ($this->job !== null && ! $event->job instanceof SyncJob) {
                 $this->thrown[$event->exception] = $this->job;
+
+                if ($this->closure !== null) {
+                    $this->closures[$event->exception] = $this->closure;
+                }
             }
         });
         // `queue:work --once` never loops, so the job must not outlive its attempt.
         Event::listen(JobAttempted::class, function (JobAttempted $event) {
             if (! $event->job instanceof SyncJob) {
                 $this->job = null;
+                $this->closure = null;
                 // Restored from the job's payload: a job dispatched by a task process carries the task.
                 Context::forgetHidden(self::CONTEXT_SOURCE);
             }
         });
+    }
+
+    /**
+     * File and first line of the queued closure that threw `$exception`, or that is running now.
+     *
+     * @return array{string, int}|null
+     */
+    public function closure(Throwable $exception): ?array
+    {
+        return $this->closures[$exception] ?? $this->closure;
     }
 
     /**
