@@ -19,7 +19,7 @@ class ExceptionsController extends Controller
 
     public const string NOTE = 'Recorded occurrences: at most one a minute per exception and scope.';
 
-    public const string SCOPED_NOTE = 'Count, last seen and message come from the occurrences recorded in this scope, at most one a minute per exception: the count is approximate. Status, resolve and reopen apply to every scope.';
+    public const string SCOPED_NOTE = 'Count, last seen and message come from the occurrences kept in this scope, at most one a minute per exception and only within retention: the count is approximate. Status, resolve and reopen apply to every scope.';
 
     public function __construct(Spyglass $spyglass, protected ExceptionQueries $queries)
     {

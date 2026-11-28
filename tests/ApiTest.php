@@ -481,6 +481,11 @@ it('keeps the scope from the list to the group, which it resolves in every scope
         ->and(apiWidget($unscoped, 'group'))->not->toHaveKey('note')
         ->and(apiWidget($unscoped, 'group')['actions'][0]['label'])->toBe('Resolve')
         ->and(apiWidget($unscoped, 'occurrences')['rows'])->toHaveCount(2);
+
+    $elsewhere = $this->getJson("/spyglass/api/exceptions/{$fingerprint}?scope=tenant:c")->assertOk()->json();
+
+    expect(collect(apiWidget($elsewhere, 'group')['items'])->firstWhere('key', 'count')['value'])->toBe(0)
+        ->and(apiWidget($elsewhere, 'occurrences')['rows'])->toBe([]);
 });
 
 it('resolves and reopens an exception group', function () {
