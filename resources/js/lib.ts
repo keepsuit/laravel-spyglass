@@ -9,7 +9,7 @@ export const config = {
 
 export type Tone = 'ok' | 'info' | 'warning' | 'error';
 
-export type Field = { key: string; label: string; type: string; tones?: Record<string, Tone> };
+export type Field = { key: string; label: string; type: string; tones?: Record<string, Tone>; sortable?: boolean };
 export type Action = { key: string; label: string; url: string };
 export type Choice = { value: string; label: string };
 export type Filter = { key: string; label: string; value: string | null; options: Choice[] | null; suggestions?: Choice[] };
@@ -24,6 +24,7 @@ export type MetricWidget = {
     link?: string;
     tone?: Tone;
     format?: 'duration';
+    detail?: { label: string; value: number | null };
 };
 export type TableWidget = {
     type: 'table';

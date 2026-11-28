@@ -52,7 +52,7 @@ class ScheduleModule extends Module
     public const int OUTPUT_BYTES = 10240;
 
     /** A namespaced class name, told by its shape: autoloading arbitrary strings may run code. */
-    protected const string CLASS_NAME = '/^\\\\?[A-Za-z_]\\w*(\\\\[A-Za-z_]\\w*)+$/';
+    public const string CLASS_NAME = '/^\\\\?[A-Za-z_]\\w*(\\\\[A-Za-z_]\\w*)+$/';
 
     /** Hidden Context key carrying the run id to the `schedule:finish` process of a background task. */
     public const string CONTEXT_RUN = 'spyglass_schedule_run';

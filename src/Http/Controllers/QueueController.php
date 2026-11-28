@@ -59,43 +59,45 @@ class QueueController extends Controller
             $metrics[0],
             // Across every queue, now: the backend reports no history.
             Widget::metric('pending', 'Pending', $pending->isEmpty() ? null : $pending->sum()),
-            ...array_slice($metrics, 1),
-            Widget::metric('duration_avg', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration'),
-            Widget::metric('duration_max', 'Max duration', self::maxDuration($totals), $aggregateFilters, format: 'duration'),
+            $metrics[1],
+            $metrics[2],
+            // Released and timed out attempts both run again.
+            Widget::metric('retried', 'Retried', ($totals['released'] ?? 0) + ($totals['timed_out'] ?? 0), $aggregateFilters, detail: ['label' => 'Timed out', 'value' => $totals['timed_out'] ?? 0]),
+            Widget::metric('duration', 'Average duration', self::averageDuration($totals), $aggregateFilters, format: 'duration', detail: ['label' => 'Max', 'value' => self::maxDuration($totals)]),
             // Dispatched last: series colors go by position and must match the overview chart.
             self::chart($this->queries->series($from, $to, [], $aggregateBy), $from, self::STEPS[$range], ['processed', 'failed', 'released', 'timed_out', 'queued'], $aggregateFilters),
             Widget::table('sizes', 'Queues', [
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
-                Widget::field('pending', 'Pending', 'number'),
-                Widget::field('reserved', 'Running', 'number'),
-                Widget::field('delayed', 'Delayed', 'number'),
+                Widget::field('pending', 'Pending', 'number', sortable: true),
+                Widget::field('reserved', 'Running', 'number', sortable: true),
+                Widget::field('delayed', 'Delayed', 'number', sortable: true),
             ], $sizes->filter(fn (array $size) => ! isset($filters['queue']) || $size['queue'] === $filters['queue']), filters: ['queue']),
             Widget::table('jobs', 'Jobs', [
-                Widget::field('job', 'Job', 'link'),
+                Widget::field('job', 'Job', 'link', sortable: true),
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
-                ...array_map(fn (array $counter) => Widget::field($counter['key'], $counter['label'], 'number'), $counters),
-                Widget::field('duration_max', 'Max duration', 'duration'),
+                ...array_map(fn (array $counter) => Widget::field($counter['key'], $counter['label'], 'number', sortable: true), $counters),
+                Widget::field('duration_max', 'Max duration', 'duration', sortable: true),
             ], $this->queries->totals($from, $to, ['queue', 'job'], $aggregateBy)->map(
-                fn (array $row) => [...$row, 'job' => Widget::link($row['job'], 'queue?'.http_build_query([...$filters, 'job' => $row['job']]))],
+                fn (array $row) => [...$row, 'job' => $this->jobLink($row['job'], 'queue?'.http_build_query([...$filters, 'job' => $row['job']]))],
             ), filters: $aggregateFilters),
             Widget::table('failed_jobs', 'Failed jobs', [
                 Widget::field('failed_at', 'Failed at', 'datetime'),
-                Widget::field('job', 'Job'),
+                Widget::field('job', 'Job', 'link'),
                 Widget::field('connection', 'Connection'),
                 Widget::field('queue', 'Queue'),
                 Widget::field('exception', 'Exception', 'link'),
                 Widget::field('attempts', 'Attempts', 'number'),
                 Widget::field('scope_label', 'Scope'),
             ], array_map(
-                fn (array $row) => [...$row, 'exception' => $this->exceptionLink($row['exception_class'], $row['fingerprint'])],
+                fn (array $row) => [...$row, 'job' => $this->jobLink($row['job']), 'exception' => $this->exceptionLink($row['exception_class'], $row['fingerprint'])],
                 $this->rows($failed->items()),
             ), $failed, link: 'queue/failed-jobs/{uuid}', actions: $this->actions('{uuid}'), filters: ['queue', 'job', 'scope']),
         ], [
             Widget::filter('range', 'Range', $range, ['1h' => 'Last hour', '24h' => 'Last 24 hours', '7d' => 'Last 7 days']),
             Widget::filter('queue', 'Queue', $filters['queue'] ?? null, suggestions: $this->suggestions($this->queries->queues($from)->pluck('queue'))),
-            Widget::filter('job', 'Job', $filters['job'] ?? null, suggestions: $this->suggestions($this->queries->totals($from, $to, ['job'])->pluck('job'))),
+            Widget::filter('job', 'Job', $filters['job'] ?? null, suggestions: array_map(fn (string $job) => $this->jobLink($job)['label'] ?? $job, $this->suggestions($this->queries->totals($from, $to, ['job'])->pluck('job')))),
             Widget::filter('scope', 'Scope', $filters['scope'] ?? null, suggestions: $this->suggestions($this->queries->scopes(), scopes: true)),
         ]);
     }

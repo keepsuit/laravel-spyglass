@@ -156,14 +156,14 @@ function Page({ path, search, module }: { path: string; search: string; module?:
                 <NoticeContext value={setNotice}>
                     {query.error && <Problem error={query.error} />}
                     {page?.widgets.length === 0 && <p className={`${card} px-4 py-6 text-muted`}>Nothing to show: the modules behind this page are disabled.</p>}
-                    {page && <div className="grid gap-5 lg:grid-cols-2">{renderWidgets(page, ignored, active.length > 0, pageParam ? Number(pageParam) : null)}</div>}
+                    {page && <div className="grid gap-5 lg:grid-cols-2">{renderWidgets(page, ignored, active.length > 0, pageParam ? Number(pageParam) : null, params.get('sort'))}</div>}
                 </NoticeContext>
             )}
         </div>
     );
 }
 
-function renderWidgets(page: PageData, ignored: (filters: string[]) => string[], filtered: boolean, pageParam: number | null): ReactNode[] {
+function renderWidgets(page: PageData, ignored: (filters: string[]) => string[], filtered: boolean, pageParam: number | null, sort: string | null): ReactNode[] {
     const nodes: ReactNode[] = [];
     let metrics: MetricWidget[] = [];
 
@@ -173,7 +173,7 @@ function renderWidgets(page: PageData, ignored: (filters: string[]) => string[],
     };
 
     const body = (widget: Exclude<Widget, MetricWidget | GroupWidget>): ReactNode => {
-        if (widget.type === 'table') return <Table widget={widget} ignored={ignored(widget.filters)} filtered={filtered} page={pageParam} />;
+        if (widget.type === 'table') return <Table widget={widget} ignored={ignored(widget.filters)} filtered={filtered} page={pageParam} sort={sort} />;
         if (widget.type === 'series') return <Series widget={widget} ignored={ignored(widget.filters)} />;
         return <Details widget={widget} />;
     };

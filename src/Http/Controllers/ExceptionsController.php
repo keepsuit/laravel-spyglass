@@ -39,7 +39,7 @@ class ExceptionsController extends Controller
             },
             'class' => $filters['class'] ?? null,
             'scope' => $filters['scope'] ?? null,
-        ], fn ($value) => $value !== null), page: $this->page($request));
+        ], fn ($value) => $value !== null), page: $this->page($request), sort: $this->sort($request, 'groups', ['count', 'last_seen_at']));
 
         return Widget::page('Exceptions', [
             self::chart($this->queries->hourly($from = Buckets::start(self::HOURS[$range], self::HOUR), array_intersect_key($filters, array_flip(['class', 'scope']))), $from),
@@ -47,8 +47,8 @@ class ExceptionsController extends Controller
                 Widget::field('class', 'Class'),
                 Widget::field('message', 'Message'),
                 Widget::field('location', 'Location'),
-                Widget::field('count', 'Count', 'number'),
-                Widget::field('last_seen_at', 'Last seen at', 'datetime'),
+                Widget::field('count', 'Count', 'number', sortable: true),
+                Widget::field('last_seen_at', 'Last seen at', 'datetime', sortable: true),
                 Widget::field('status', 'Status', 'status', self::TONES),
             ], array_map(self::group(...), $this->rows($groups->items())), $groups, link: 'exceptions/{fingerprint}', filters: ['status', 'class', 'scope']),
         ], [

@@ -29,7 +29,7 @@ import {
     type Tone,
 } from './lib';
 
-export function Link({ to, className, children, ...rest }: { to: string; className?: string; children: ReactNode; 'aria-current'?: 'page' }) {
+export function Link({ to, className, children, ...rest }: { to: string; className?: string; title?: string; children: ReactNode; 'aria-current'?: 'page' }) {
     const onClick = (event: MouseEvent) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
@@ -116,13 +116,15 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
             );
         }
         case 'link': {
-            const link = value as { label: string; url: string | null };
+            const link = value as { label: string; url: string | null; title?: string };
             return link.url ? (
-                <Link to={link.url} className="link break-words text-accent-ink">
+                <Link to={link.url} title={link.title} className="link break-words text-accent-ink">
                     {breakable(link.label)}
                 </Link>
             ) : (
-                <span className="break-words">{breakable(link.label)}</span>
+                <span title={link.title} className="break-words">
+                    {breakable(link.label)}
+                </span>
             );
         }
         case 'label': {
@@ -223,7 +225,7 @@ export function Group({ widget, children }: { widget: GroupWidget; children: Rea
 /** Consecutive metrics share one row. A linked metric opens its page. */
 export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored: (filters: string[]) => string[] }) {
     return (
-        <div className="grid grid-cols-2 gap-3 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 sm:grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))]">
+        <div className="grid grid-cols-2 gap-3 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 sm:grid-cols-[repeat(auto-fit,minmax(8rem,1fr))]">
             {metrics.map((metric) => {
                 const notes = ignored(metric.filters);
                 const body = (
@@ -237,8 +239,13 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
                                 metric.tone === 'error' ? 'text-error' : metric.tone === 'warning' ? 'text-warning' : ''
                             }`}
                         >
-                            {metric.value === null ? '–' : metric.format === 'duration' && typeof metric.value === 'number' ? formatDuration(metric.value) : formatNumber(metric.value)}
+                            {formatMetric(metric.value, metric.format)}
                         </div>
+                        {metric.detail && (
+                            <div className="mt-2 text-xs text-muted tabular-nums">
+                                {metric.detail.label} {formatMetric(metric.detail.value, metric.format)}
+                            </div>
+                        )}
                         {notes.length > 0 && <div className="mt-2 text-xs text-muted">Not filtered by {notes.join(', ')}</div>}
                     </>
                 );
@@ -257,6 +264,10 @@ export function Metrics({ metrics, ignored }: { metrics: MetricWidget[]; ignored
             })}
         </div>
     );
+}
+
+function formatMetric(value: number | string | null, format?: 'duration'): string {
+    return value === null ? '–' : format === 'duration' && typeof value === 'number' ? formatDuration(value) : formatNumber(value);
 }
 
 export type Notice = { tone: 'ok' | 'error'; text: string };
@@ -285,8 +296,36 @@ function Actions({ actions, row = {} }: { actions: Action[]; row?: Row }) {
     );
 }
 
-export function Table({ widget, ignored, filtered, page }: { widget: TableWidget; ignored: string[]; filtered: boolean; page: number | null }) {
+/** The comparable part of a cell: the text of a link or label, the first of several lines. */
+function sortValue(value: unknown): string | number | null {
+    if (value === null || value === undefined || value === '') return null;
+    if (Array.isArray(value)) return sortValue(value[0]);
+    if (typeof value === 'object') return sortValue((value as { label?: unknown; text?: unknown }).label ?? (value as { text?: unknown }).text);
+    return typeof value === 'number' ? value : String(value);
+}
+
+/** Rows by a column, empty values last in either direction. */
+export function sortRows(rows: Row[], key: string, descending: boolean): Row[] {
+    return [...rows].sort((a, b) => {
+        const [x, y] = [sortValue(a[key]), sortValue(b[key])];
+        if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
+        const order = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+        return descending ? -order : order;
+    });
+}
+
+// Counts, durations and times read most usefully from the largest or latest.
+const descendingFirst = (field: Field) => ['number', 'duration', 'datetime'].includes(field.type);
+
+export function Table({ widget, ignored, filtered, page, sort = null }: { widget: TableWidget; ignored: string[]; filtered: boolean; page: number | null; sort?: string | null }) {
     const box = useBox();
+    const [table, column = ''] = sort?.split(':') ?? [];
+    const sorted = table === widget.key ? widget.columns.find((field) => field.sortable && field.key === column.replace(/^-/, '')) : undefined;
+    const descending = column.startsWith('-');
+    // A paginated table comes sorted from the server.
+    const rows = sorted && !widget.pagination ? sortRows(widget.rows, sorted.key, descending) : widget.rows;
+    const sortBy = (field: Field) =>
+        setParams({ sort: `${widget.key}:${(sorted === field ? !descending : descendingFirst(field)) ? '-' : ''}${field.key}` });
     // Half a row is narrow: closer columns, the same outer edges.
     const cellX = useContext(Nested) ? 'px-3 first:pl-4 last:pr-4' : 'px-4';
     const { pagination, link } = widget;
@@ -307,7 +346,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                     {widget.more && <ViewAll to={widget.more} />}
                 </div>
             </Heading>
-            {widget.rows.length === 0 ? (
+            {rows.length === 0 ? (
                 <p className="border-t border-line px-4 py-6 text-muted">{widget.empty ?? (filtered ? 'Nothing matches these filters.' : 'Nothing recorded yet.')}</p>
             ) : (
                 <div className="rows overflow-x-auto">
@@ -315,8 +354,22 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                         <thead className="border-y border-line text-xs text-muted">
                             <tr>
                                 {widget.columns.map((column) => (
-                                    <th key={column.key} scope="col" className={`${cellX} py-2 font-medium whitespace-nowrap ${alignRight(column) ? 'text-right' : ''}`}>
-                                        {column.label}
+                                    <th
+                                        key={column.key}
+                                        scope="col"
+                                        aria-sort={sorted === column ? (descending ? 'descending' : 'ascending') : undefined}
+                                        className={`${cellX} py-2 font-medium whitespace-nowrap ${alignRight(column) ? 'text-right' : ''}`}
+                                    >
+                                        {column.sortable ? (
+                                            <button type="button" onClick={() => sortBy(column)} className={`inline-flex items-center gap-1 hover:text-ink ${sorted === column ? 'text-ink' : ''}`}>
+                                                {column.label}
+                                                <span aria-hidden className={sorted === column ? '' : 'opacity-0'}>
+                                                    {sorted === column && !descending ? '▲' : '▼'}
+                                                </span>
+                                            </button>
+                                        ) : (
+                                            column.label
+                                        )}
                                     </th>
                                 ))}
                                 {widget.actions.length > 0 && (
@@ -327,7 +380,7 @@ export function Table({ widget, ignored, filtered, page }: { widget: TableWidget
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
-                            {widget.rows.map((row, index) => (
+                            {rows.map((row, index) => (
                                 <tr
                                     key={link ? fill(link, row) : index}
                                     onClick={(event) => open(event, row)}

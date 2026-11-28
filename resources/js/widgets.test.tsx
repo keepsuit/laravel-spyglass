@@ -102,6 +102,34 @@ describe('Table', () => {
         expect([date.dataset.label, date.dataset.empty]).toEqual(['Failed at', 'true']);
     });
 
+    it('sorts the rows of an unpaginated table in the browser, empty values last', () => {
+        const jobs: TableWidget = {
+            ...table,
+            key: 'jobs',
+            columns: [{ key: 'job', label: 'Job', type: 'link', sortable: true }, { key: 'failed', label: 'Failed', type: 'number', sortable: true }],
+            rows: [
+                { job: { label: 'ReportJob', url: null }, failed: 2 },
+                { job: { label: 'MailJob', url: null }, failed: null },
+                { job: { label: 'SyncJob', url: null }, failed: 9 },
+            ],
+            pagination: null,
+            link: null,
+            actions: [],
+        };
+        const order = () => screen.getAllByRole('row').slice(1).map((row) => row.querySelector('td')?.textContent);
+
+        wrap(<Table widget={jobs} ignored={[]} filtered={false} page={null} sort="jobs:-failed" />);
+        expect(order()).toEqual(['SyncJob', 'ReportJob', 'MailJob']);
+        expect(screen.getByRole('columnheader', { name: /Failed/ }).getAttribute('aria-sort')).toBe('descending');
+
+        cleanup();
+        wrap(<Table widget={jobs} ignored={[]} filtered={false} page={null} sort="jobs:job" />);
+        expect(order()).toEqual(['MailJob', 'ReportJob', 'SyncJob']);
+
+        fireEvent.click(screen.getByRole('button', { name: /Failed/ }));
+        expect(new URLSearchParams(window.location.search).get('sort')).toBe('jobs:-failed');
+    });
+
     it('explains an empty table', () => {
         wrap(<Table widget={{ ...table, rows: [], pagination: null }} ignored={[]} filtered={false} page={null} />);
         expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
