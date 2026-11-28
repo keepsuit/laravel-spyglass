@@ -52,7 +52,7 @@ Spyglass never stores job payloads, query bindings or the driver message of quer
 - With the schedule module disabled, exceptions and logs of scheduled tasks have the `schedule:run` command as their source, not the task.
 - The `source_id` of entries from a successful run of a sub-minute task points to no run, since those runs are not stored.
 - With a `database` cache store, occurrences and log entries are throttled per process only, so several processes can store the same one in a minute: a cache query inside an open transaction could abort it on PostgreSQL. With stancl/tenancy this is often the store in use: see [Storage and cache](#storage-and-cache).
-- With a scope filter, the exception list and page take counts, last seen and message from the occurrences stored in that scope. Occurrences are throttled per exception and scope, so these counts are approximate (a lower bound).
+- With a scope filter, the exception list and page take counts, last seen and message from the occurrences stored in that scope. Occurrences are throttled per exception and scope and pruned after their retention, so these counts are approximate (a lower bound). The sources of an exception are counted across scopes: its page shows them unfiltered.
 - Resolving or reopening an exception applies to every scope, even from a page filtered by scope: the status is that of the exception as a whole.
 - An exception thrown in the `catch()` callback of a queued closure is located in the closure's file, at a wrong line.
 - Exceptions of queued closures run synchronously (`sync` driver, `dispatchSync()`) are located at the `dispatch()` call, not at the throw.
