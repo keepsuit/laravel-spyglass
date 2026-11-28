@@ -165,6 +165,15 @@ export function Value({ field, value, compact = false }: { field: Field; value: 
     }
 }
 
+/** A chevron pointing right: rotate it to point elsewhere. */
+export function Angle({ className = '' }: { className?: string }) {
+    return (
+        <svg viewBox="0 0 24 24" className={`size-4 shrink-0 transition-transform duration-150 ${className}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m9 6 6 6-6 6" />
+        </svg>
+    );
+}
+
 /** Class names and paths wrap after a separator rather than inside a name. */
 export function breakable(text: string): ReactNode[] {
     return text.split(/(?<=[\\/])/).flatMap((part, index) => (index ? [<wbr key={index} />, part] : [part]));
@@ -357,6 +366,11 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                     <table className="w-full text-left text-[13px]" data-wide={widget.columns.length > 6 || undefined}>
                         <thead className="border-y border-line text-xs text-muted">
                             <tr>
+                                {widget.expand && (
+                                    <th scope="col" className="w-0 pl-3">
+                                        <span className="sr-only">Details</span>
+                                    </th>
+                                )}
                                 {widget.columns.map((column) => (
                                     <th
                                         key={column.key}
@@ -381,11 +395,6 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                                         <span className="sr-only">Actions</span>
                                     </th>
                                 )}
-                                {widget.expand && (
-                                    <th scope="col">
-                                        <span className="sr-only">Details</span>
-                                    </th>
-                                )}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
@@ -395,6 +404,19 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                                         onClick={(event) => open(event, row, index)}
                                         className={`align-top transition-colors duration-150 ${link || widget.expand ? 'cursor-pointer hover:bg-bg/70' : ''}`}
                                     >
+                                        {widget.expand && (
+                                            <td className="w-0 py-2.5 pr-0 pl-3">
+                                                <button
+                                                    type="button"
+                                                    aria-expanded={opened.has(index)}
+                                                    aria-label="Details"
+                                                    onClick={() => toggle(index)}
+                                                    className="flex size-5 items-center justify-center text-muted hover:text-ink"
+                                                >
+                                                    <Angle className={opened.has(index) ? 'rotate-90' : ''} />
+                                                </button>
+                                            </td>
+                                        )}
                                         {widget.columns.map((column, columnIndex) => (
                                             <td
                                                 key={column.key}
@@ -415,15 +437,6 @@ export function Table({ widget, ignored, filtered, page, sort = null }: { widget
                                         {widget.actions.length > 0 && (
                                             <td className="px-4 py-2">
                                                 <Actions actions={widget.actions} row={row} />
-                                            </td>
-                                        )}
-                                        {widget.expand && (
-                                            <td className="px-4 py-2 text-right">
-                                                <button type="button" aria-expanded={opened.has(index)} aria-label="Details" onClick={() => toggle(index)} className="btn btn-icon">
-                                                    <span aria-hidden className={`transition-transform duration-150 ${opened.has(index) ? 'rotate-180' : ''}`}>
-                                                        ▾
-                                                    </span>
-                                                </button>
                                             </td>
                                         )}
                                     </tr>

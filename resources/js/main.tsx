@@ -5,7 +5,7 @@ import { Fragment, StrictMode, useEffect, useRef, useState, type ReactNode } fro
 import { createRoot } from 'react-dom/client';
 import './app.css';
 import { api, ApiError, href, navigate, setParams, useLocation, type Choice, type Filter, type GroupWidget, type MetricWidget, type Page as PageData, type Widget } from './lib';
-import { breakable, card, Details, Group, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
+import { Angle, breakable, card, Details, Group, Link, Metrics, NoticeContext, Series, Table, type Notice } from './widgets';
 
 const client = new QueryClient({
     defaultOptions: {
@@ -301,7 +301,9 @@ function OptionFilter({ filter, fromUrl }: { filter: Filter; fromUrl: string | n
                 <Select.Label>{filter.label}</Select.Label>
                 <Select.Trigger className={`${control} flex w-full items-center sm:w-auto sm:min-w-48 justify-between gap-2 hover:border-muted`}>
                     <Select.Value />
-                    <Select.Icon className="text-muted">▾</Select.Icon>
+                    <Select.Icon className="text-muted">
+                        <Angle className="rotate-90" />
+                    </Select.Icon>
                 </Select.Trigger>
                 <Select.Portal>
                     <Select.Positioner sideOffset={4} className="z-10 outline-none">
