@@ -52,6 +52,9 @@ Spyglass never stores job payloads, query bindings or the driver message of quer
 - With the schedule module disabled, exceptions and logs of scheduled tasks have the `schedule:run` command as their source, not the task.
 - The `source_id` of entries from a successful run of a sub-minute task points to no run, since those runs are not stored.
 - With a `database` cache store, occurrences and log entries are throttled per process only, so several processes can store the same one in a minute: a cache query inside an open transaction could abort it on PostgreSQL.
+- An exception thrown in the `catch()` callback of a queued closure is located in the closure's file, at a wrong line.
+- Exceptions of queued closures run synchronously (`sync` driver, `dispatchSync()`) are located at the `dispatch()` call, not at the throw.
+- Closures run by `Concurrency::run()` with the `process` driver are not supported: their exceptions are located in `artisan`.
 
 ## Requirements
 
