@@ -25,7 +25,8 @@ uses(WithAllModules::class);
 beforeEach(function () {
     Gate::define('viewSpyglass', fn ($user = null) => true);
     // Read at request time, so modules added after boot are listed without registering their listeners.
-    Keepsuit\Spyglass\Spyglass::$modules += ['queue' => QueueModule::class, 'health' => HealthModule::class];
+    $this->enableModule($this->app, QueueModule::class);
+    $this->enableModule($this->app, HealthModule::class);
 
     config([
         'queue.failed.driver' => 'database-uuids',
@@ -117,7 +118,7 @@ it('answers 404 on every endpoint of a disabled module, leaving its data untouch
     seedExceptionGroup(str_repeat('a', 40));
     $parameters = ['task' => sha1('inspire'), 'uuid' => $uuid, 'fingerprint' => str_repeat('a', 40), 'id' => (string) apiLogEntry('error', 'Disk full')];
 
-    config(["spyglass.modules.{$module}.enabled" => false]);
+    config([moduleKey($module).'.enabled' => false]);
 
     $routes = array_filter(apiRoutes(), fn (Route $route) => explode('.', (string) $route->getName())[2] === $module);
 
@@ -219,7 +220,7 @@ it('describes the overview of the enabled modules', function () {
 });
 
 it('leaves disabled modules out of the overview, without querying them', function () {
-    config(['spyglass.modules.queue.enabled' => false, 'spyglass.modules.exceptions.enabled' => false]);
+    config([moduleKey('queue').'.enabled' => false, moduleKey('exceptions').'.enabled' => false]);
     Spyglass::connection()->enableQueryLog();
 
     $page = $this->getJson('/spyglass/api/overview')->assertOk()->json();
@@ -230,7 +231,7 @@ it('leaves disabled modules out of the overview, without querying them', functio
 
 it('shows an empty overview when every module is disabled', function () {
     foreach (['schedule', 'queue', 'exceptions', 'logs', 'health'] as $module) {
-        config(["spyglass.modules.{$module}.enabled" => false]);
+        config([moduleKey($module).'.enabled' => false]);
     }
 
     expect($this->getJson('/spyglass/api/overview')->assertOk()->json('widgets'))->toBe([]);
@@ -332,7 +333,7 @@ it('describes the queue', function () {
     expect(apiWidget($scoped, 'processed')['value'])->toBe(6)
         ->and(apiWidget($scoped, 'failed_jobs')['rows'])->toBe([]);
 
-    config(['spyglass.modules.queue.aggregate_by_scope' => true]);
+    config([moduleKey('queue').'.aggregate_by_scope' => true]);
     $scoped = $this->getJson('/spyglass/api/queue?scope=tenant:other')->assertOk()->json();
 
     expect(apiWidget($scoped, 'processed'))->toMatchArray(['value' => 0, 'filters' => ['range', 'queue', 'job', 'scope']]);
@@ -366,7 +367,7 @@ it('shows a failed job with its index row and exception group', function () {
         ->and($items['payload'])->toBeArray()->toHaveKey('uuid', $uuid)
         ->and(collect(apiWidget($page, 'job')['actions'])->pluck('url')->all())->toBe(["queue/failed-jobs/{$uuid}/retry", "queue/failed-jobs/{$uuid}/delete"]);
 
-    config(['spyglass.modules.exceptions.enabled' => false]);
+    config([moduleKey('exceptions').'.enabled' => false]);
 
     expect(apiItems($this->getJson("/spyglass/api/queue/failed-jobs/{$uuid}")->json(), 'job')['exception_group'])
         ->toBe(['label' => RuntimeException::class, 'url' => null]);

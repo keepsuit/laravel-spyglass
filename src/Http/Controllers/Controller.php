@@ -4,6 +4,7 @@ namespace Keepsuit\Spyglass\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Keepsuit\Spyglass\Dashboard\Widget;
+use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Spyglass;
 
@@ -142,6 +143,6 @@ abstract class Controller
      */
     protected function exceptionLink(?string $class, ?string $fingerprint): ?array
     {
-        return Widget::link($class, $fingerprint === null || ! config('spyglass.modules.exceptions.enabled') ? null : "exceptions/{$fingerprint}");
+        return Widget::link($class, $fingerprint === null || ! ExceptionsModule::config('enabled') ? null : "exceptions/{$fingerprint}");
     }
 }

@@ -8,7 +8,7 @@ use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Facade;
 use Keepsuit\Spyglass\Http\Controllers\DashboardController;
-use Keepsuit\Spyglass\Spyglass;
+use Keepsuit\Spyglass\Modules\Module;
 use Keepsuit\Spyglass\SpyglassServiceProvider;
 use Keepsuit\Spyglass\Tests\Fixtures\TestModule;
 use Orchestra\Testbench\Concerns\WithLaravelMigrations;
@@ -63,8 +63,6 @@ class TestCase extends Orchestra
     {
         // The real build is made by CI on main; the tests never depend on it.
         DashboardController::$dist = __DIR__.'/Fixtures/dist';
-        Spyglass::$modules = ['test' => TestModule::class];
-
         $app['config']->set([
             'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
             'database.default' => env('DB_CONNECTION', 'testing'),
@@ -72,7 +70,7 @@ class TestCase extends Orchestra
             'cache.default' => 'array',
             'queue.default' => 'database',
             'queue.failed.driver' => 'null',
-            'spyglass.modules.test' => ['enabled' => true, 'retention' => ['entries' => 7]],
+            'spyglass.modules' => [TestModule::class => ['enabled' => true, 'retention' => ['entries' => 7]]],
             ...$this->bootConfig,
         ]);
     }
@@ -80,6 +78,19 @@ class TestCase extends Orchestra
     protected function defineDatabaseMigrations(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
+    }
+
+    /**
+     * Enable a package module with its default options.
+     *
+     * @param  class-string<Module>  $class
+     */
+    protected function enableModule(Application $app, string $class): void
+    {
+        $key = 'spyglass.modules.'.$class;
+
+        // Options already set, such as boot config, win over the defaults.
+        $app['config']->set($key, array_replace_recursive((require __DIR__.'/../config/spyglass.php')['modules'][$class], $app['config']->get($key, [])));
     }
 
     /**

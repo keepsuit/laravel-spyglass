@@ -27,7 +27,7 @@ Later: scheduler and queue heartbeats, alerts, on-demand request tracing, and an
 
 ## Stored data
 
-Spyglass never stores job payloads, query bindings or the driver message of query errors, and masks query string values unless allowed by `spyglass.modules.exceptions.query_allowlist`. It does store exception messages, the authenticated user id of an occurrence, log messages with their context and the configured Context keys: these can hold personal data, so treat the Spyglass tables like application logs when it comes to retention and access.
+Spyglass never stores job payloads, query bindings or the driver message of query errors, and masks query string values unless allowed by the `query_allowlist` option of the exceptions module. It does store exception messages, the authenticated user id of an occurrence, log messages with their context and the configured Context keys: these can hold personal data, so treat the Spyglass tables like application logs when it comes to retention and access.
 
 ## Known limitations
 
@@ -82,7 +82,39 @@ You can publish the config file with:
 php artisan vendor:publish --tag="spyglass-config"
 ```
 
-The dashboard is served at `/spyglass` (`SPYGLASS_PATH`), behind the `viewSpyglass` gate. Its assets ship prebuilt in `dist/`, built by CI on `main`: there is nothing to publish.
+The dashboard is served at `/spyglass` (`SPYGLASS_PATH`, optionally on `SPYGLASS_DOMAIN`), behind the `viewSpyglass` gate. Its assets ship prebuilt in `dist/`, built by CI on `main`: there is nothing to publish.
+
+### Logs
+
+Spyglass declares a `spyglass` log channel. To record logs, add it to the application's stack. With the default `config/logging.php`, set it in `.env`:
+
+```dotenv
+LOG_STACK=single,spyglass
+```
+
+Or list it in the stack channels of a customised `config/logging.php`:
+
+```php
+'stack' => ['driver' => 'stack', 'channels' => ['stderr', 'spyglass']],
+```
+
+### Modules
+
+Modules are listed in `spyglass.modules`, keyed by class, in dashboard order. Each one can be turned off with its `SPYGLASS_<MODULE>_ENABLED` variable (for example `SPYGLASS_LOGS_ENABLED=false`). A module missing from a published config file is disabled: after an upgrade that adds a module, copy its entry from the package config to enable it.
+
+### Storage and cache
+
+Entries are written through a copy of the storage connection registered as `spyglass`, so they stay outside the application's transactions: a rollback or a deadlock on either side does not affect the other. On SQLite, which allows a single writer, the connection itself is used. The connection and cache store names are resolved once at boot, so runtime switches of the defaults (for example per-tenant databases) do not affect them.
+
+The cache throttles repeated exceptions and log messages across processes and holds queue sizes for a few seconds. Set `SPYGLASS_CACHE_STORE=array` to keep it per process. `SPYGLASS_CACHE_STORE=null` does not disable it: `env()` reads it as `null`, which selects the application's default store.
+
+### Pruning
+
+`spyglass:prune` deletes entries older than each module's retention and is scheduled daily. To run it on your own schedule, set `schedule_prune` to `false` and schedule the command yourself:
+
+```php
+Schedule::command('spyglass:prune')->dailyAt('03:00');
+```
 
 ## Testing
 

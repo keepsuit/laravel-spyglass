@@ -3,6 +3,7 @@
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Keepsuit\Spyglass\Modules\Health\HealthModule;
 use Keepsuit\Spyglass\Modules\Health\HealthQueries;
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
 use Keepsuit\Spyglass\Modules\Queue\QueueQueries;
@@ -10,6 +11,8 @@ use Keepsuit\Spyglass\Spyglass;
 use Keepsuit\Spyglass\Tests\Fixtures\WithQueueModule;
 
 uses(WithQueueModule::class);
+
+beforeEach(fn () => $this->enableModule($this->app, HealthModule::class));
 
 /**
  * @return array<string, array{key: string, label: string, status: string, value: mixed, message: ?string}>
@@ -77,8 +80,8 @@ it('shows the application version and installed packages only when known', funct
     expect(healthChecks())->not->toHaveKey('version');
 
     config([
-        'spyglass.modules.health.version' => 'v1.4.0',
-        'spyglass.modules.health.versions' => ['Framework' => 'laravel/framework', 'Missing' => 'keepsuit/not-installed'],
+        moduleKey('health').'.app_version' => 'v1.4.0',
+        moduleKey('health').'.packages' => ['Framework' => 'laravel/framework', 'Missing' => 'keepsuit/not-installed'],
     ]);
 
     $checks = healthChecks();
@@ -108,7 +111,7 @@ it('checks once two connections to the same server', function () {
 });
 
 it('reports a storage connection that is not configured as a failed check', function () {
-    config(['spyglass.modules.health.versions' => null]);
+    config([moduleKey('health').'.packages' => null]);
     app()->instance(Spyglass::class, new Spyglass(connection: 'missing', cacheStore: 'array'));
 
     expect(healthChecks()['database:missing']['status'])->toBe('error');
@@ -118,8 +121,8 @@ it('checks the configured connections and cache stores', function () {
     config([
         'database.connections.other' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
         'cache.stores.second' => ['driver' => 'array'],
-        'spyglass.modules.health.connections' => ['other', 'unknown'],
-        'spyglass.modules.health.cache_stores' => ['second'],
+        moduleKey('health').'.connections' => ['other', 'unknown'],
+        moduleKey('health').'.cache_stores' => ['second'],
     ]);
 
     $checks = healthChecks();
@@ -134,7 +137,7 @@ it('checks the configured connections and cache stores', function () {
 it('reports a database error with its SQLSTATE only', function () {
     config([
         'database.connections.down' => ['driver' => 'mysql', 'host' => '127.0.0.1', 'port' => 1, 'database' => 'x', 'username' => 'secret-user', 'password' => 'x'],
-        'spyglass.modules.health.connections' => ['down'],
+        moduleKey('health').'.connections' => ['down'],
     ]);
 
     $check = healthChecks()['database:down'];
@@ -147,7 +150,7 @@ it('gives up on a database server that does not answer after the timeout', funct
     [$server, $port] = stallingServer();
     config([
         'database.connections.stalled' => ['driver' => $driver, 'host' => '127.0.0.1', 'port' => $port, 'database' => 'x', 'username' => 'x', 'password' => 'x'],
-        'spyglass.modules.health.connections' => ['stalled'],
+        moduleKey('health').'.connections' => ['stalled'],
     ]);
 
     $start = microtime(true);
@@ -167,7 +170,7 @@ it('gives up on a redis cache that does not answer after the timeout', function 
         'database.redis.stalled' => ['host' => '127.0.0.1', 'port' => $port],
         'database.redis.client' => 'phpredis',
         'cache.stores.stalled' => ['driver' => 'redis', 'connection' => 'stalled'],
-        'spyglass.modules.health.cache_stores' => ['stalled'],
+        moduleKey('health').'.cache_stores' => ['stalled'],
     ]);
 
     $start = microtime(true);
@@ -181,8 +184,8 @@ it('skips the database cache and queue once a database check failed', function (
     config([
         'database.connections.down' => ['driver' => 'sqlite', 'database' => '/nonexistent/spyglass.sqlite', 'prefix' => ''],
         'cache.stores.db' => ['driver' => 'database', 'table' => 'cache'],
-        'spyglass.modules.health.connections' => ['down'],
-        'spyglass.modules.health.cache_stores' => ['db', 'array'],
+        moduleKey('health').'.connections' => ['down'],
+        moduleKey('health').'.cache_stores' => ['db', 'array'],
     ]);
 
     $checks = healthChecks();
@@ -204,7 +207,7 @@ it('checks the default cache store with a real round trip, without leaving the k
 it('reports a cache error without the query bindings', function () {
     config([
         'cache.stores.broken' => ['driver' => 'database', 'table' => 'missing_cache', 'connection' => config('database.default')],
-        'spyglass.modules.health.cache_stores' => ['broken'],
+        moduleKey('health').'.cache_stores' => ['broken'],
     ]);
 
     $check = healthChecks()['cache:broken'];
@@ -215,7 +218,7 @@ it('reports a cache error without the query bindings', function () {
 });
 
 it('reports the pending jobs of the default queue without the queue module', function () {
-    config(['spyglass.modules.queue.enabled' => false]);
+    config([moduleKey('queue').'.enabled' => false]);
     Queue::connection('database')->pushRaw('{}');
 
     expect(healthChecksOf('queue'))->toBe([
@@ -235,7 +238,7 @@ it('reports the queues seen by the queue module', function () {
 });
 
 it('does not count a queue or a cache that stores nothing, and reports a backend that fails', function () {
-    config(['queue.default' => 'sync', 'cache.stores.none' => ['driver' => 'null'], 'spyglass.modules.health.cache_stores' => ['none']]);
+    config(['queue.default' => 'sync', 'cache.stores.none' => ['driver' => 'null'], moduleKey('health').'.cache_stores' => ['none']]);
 
     expect(healthChecks()['queue:sync:default'])->toMatchArray(['status' => 'info', 'value' => null])
         ->and(healthChecks()['cache:none'])->toMatchArray(['status' => 'info', 'value' => null]);
@@ -280,7 +283,7 @@ it('does not read the queue list from a storage left out of the checked connecti
     [$server, $port] = stallingServer();
     config([
         'database.connections.stalled' => stallingPgsql($port),
-        'spyglass.modules.health.connections' => [config('database.default')],
+        moduleKey('health').'.connections' => [config('database.default')],
     ]);
     app()->instance(Spyglass::class, new Spyglass(connection: 'stalled', cacheStore: 'array'));
 

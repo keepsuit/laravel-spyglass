@@ -15,12 +15,8 @@ use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
-use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
-use Keepsuit\Spyglass\Modules\Health\HealthModule;
-use Keepsuit\Spyglass\Modules\Logs\LogsModule;
+use InvalidArgumentException;
 use Keepsuit\Spyglass\Modules\Module;
-use Keepsuit\Spyglass\Modules\Queue\QueueModule;
-use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Support\Text;
 use RuntimeException;
 use Throwable;
@@ -28,21 +24,6 @@ use Throwable;
 class Spyglass
 {
     use DetectsConcurrencyErrors, DetectsLostConnections;
-
-    /**
-     * Module classes keyed by their `spyglass.modules` config key.
-     *
-     * @internal
-     *
-     * @var array<string, class-string<Module>>
-     */
-    public static array $modules = [
-        'schedule' => ScheduleModule::class,
-        'queue' => QueueModule::class,
-        'exceptions' => ExceptionsModule::class,
-        'logs' => LogsModule::class,
-        'health' => HealthModule::class,
-    ];
 
     /** @var array<string, list<array<string, mixed>>> */
     protected array $inserts = [];
@@ -151,7 +132,7 @@ class Spyglass
     {
         return $this->ignore(function () {
             try {
-                $keys = config('spyglass.context.keys', []);
+                $keys = config('spyglass.context', []);
                 $context = $keys === [] ? [] : Context::only($keys);
 
                 $scope = $this->resolveScopeUsing ? ($this->resolveScopeUsing)($context) : null;
@@ -298,6 +279,34 @@ class Spyglass
     }
 
     /**
+     * Enabled module classes keyed by name, in config order.
+     *
+     * @internal
+     *
+     * @return array<string, class-string<Module>>
+     */
+    public function moduleClasses(): array
+    {
+        $classes = [];
+
+        foreach (config('spyglass.modules', []) as $class => $options) {
+            if (! ($options['enabled'] ?? false)) {
+                continue;
+            }
+
+            $name = $class::name();
+
+            if (isset($classes[$name])) {
+                throw new InvalidArgumentException("Spyglass modules [{$classes[$name]}] and [{$class}] share the name [{$name}].");
+            }
+
+            $classes[$name] = $class;
+        }
+
+        return $classes;
+    }
+
+    /**
      * Enabled modules keyed by name.
      *
      * @internal
@@ -306,15 +315,7 @@ class Spyglass
      */
     public function modules(): array
     {
-        $modules = [];
-
-        foreach (static::$modules as $name => $class) {
-            if (config("spyglass.modules.{$name}.enabled")) {
-                $modules[$name] = app($class);
-            }
-        }
-
-        return $modules;
+        return array_map(fn (string $class) => app($class), $this->moduleClasses());
     }
 
     /**

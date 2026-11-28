@@ -35,3 +35,20 @@ it('registers listeners, routes, gate and schedule when enabled', function () {
         ->and($app[Gate::class]->has('viewSpyglass'))->toBeTrue()
         ->and(pruneEvents($app))->toHaveCount(1);
 });
+
+it('refuses two modules with the same name', function () {
+    config()->set('spyglass.modules', [
+        TestModule::class => ['enabled' => true],
+        SameNameModule::class => ['enabled' => true],
+    ]);
+
+    expect(fn () => app(Spyglass::class)->modules())->toThrow(InvalidArgumentException::class, 'share the name [test]');
+});
+
+it('declares the spyglass log channel unless the application does', function () {
+    expect(config('logging.channels.spyglass'))->toBe(['driver' => 'spyglass'])
+        ->and($this->bootApplication(['logging.channels.spyglass' => ['driver' => 'spyglass', 'level' => 'error']])['config']->get('logging.channels.spyglass'))
+        ->toBe(['driver' => 'spyglass', 'level' => 'error']);
+});
+
+class SameNameModule extends TestModule {}

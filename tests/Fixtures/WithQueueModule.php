@@ -3,7 +3,6 @@
 namespace Keepsuit\Spyglass\Tests\Fixtures;
 
 use Keepsuit\Spyglass\Modules\Queue\QueueModule;
-use Keepsuit\Spyglass\Spyglass;
 
 trait WithQueueModule
 {
@@ -11,7 +10,7 @@ trait WithQueueModule
     {
         parent::defineEnvironment($app);
 
-        Spyglass::$modules['queue'] = QueueModule::class;
+        $this->enableModule($app, QueueModule::class);
 
         $app['config']->set([
             'queue.failed.driver' => 'database-uuids',

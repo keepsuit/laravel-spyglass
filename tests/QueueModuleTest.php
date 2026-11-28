@@ -288,7 +288,7 @@ it('updates the index row when a retried job fails again', function () {
 });
 
 it('keeps the scope captured when the job started after the context is cleared', function () {
-    config()->set('spyglass.context.keys', ['tenant']);
+    config()->set('spyglass.context', ['tenant']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant']) ? "tenant:{$context['tenant']}" : null);
 
     Context::add('tenant', 'acme');
@@ -303,8 +303,8 @@ it('keeps the scope captured when the job started after the context is cleared',
 
 it('keeps aggregates per scope next to the totals when enabled', function () {
     config()->set([
-        'spyglass.modules.queue.aggregate_by_scope' => true,
-        'spyglass.context.keys' => ['tenant'],
+        moduleKey('queue').'.aggregate_by_scope' => true,
+        'spyglass.context' => ['tenant'],
     ]);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant']) ? "tenant:{$context['tenant']}" : null);
 
@@ -324,7 +324,7 @@ it('keeps aggregates per scope next to the totals when enabled', function () {
 });
 
 it('counts a scope that clips to nothing in the total only, once', function () {
-    config()->set('spyglass.modules.queue.aggregate_by_scope', true);
+    config()->set(moduleKey('queue').'.aggregate_by_scope', true);
     SpyglassFacade::resolveScopeUsing(fn () => "\0");
 
     QueueJob::dispatch();

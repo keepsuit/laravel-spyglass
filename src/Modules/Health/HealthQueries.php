@@ -99,11 +99,11 @@ class HealthQueries
             $this->check('laravel', 'Laravel', 'info', app()->version()),
         ];
 
-        if (filled($version = config('spyglass.modules.health.version'))) {
+        if (filled($version = HealthModule::config('app_version'))) {
             $checks[] = $this->check('version', 'Application version', 'info', (string) $version);
         }
 
-        foreach (config('spyglass.modules.health.versions') ?? [] as $label => $package) {
+        foreach (HealthModule::config('packages') ?? [] as $label => $package) {
             if (InstalledVersions::isInstalled($package)) {
                 $checks[] = $this->check("package:{$package}", (string) $label, 'info', InstalledVersions::getPrettyVersion($package));
             }
@@ -138,7 +138,7 @@ class HealthQueries
      */
     protected function connections(): array
     {
-        $names = config('spyglass.modules.health.connections')
+        $names = HealthModule::config('connections')
             ?? [config('database.default'), $this->spyglass->connectionName()];
 
         // The storage connection is a copy of an application connection: the same server is checked once.
@@ -166,7 +166,7 @@ class HealthQueries
      */
     protected function cacheStores(): array
     {
-        $names = config('spyglass.modules.health.cache_stores')
+        $names = HealthModule::config('cache_stores')
             ?? [config('cache.default'), $this->spyglass->cacheStore()];
 
         return array_values(array_unique($names));

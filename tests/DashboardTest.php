@@ -72,6 +72,21 @@ it('denies the shell and the assets without authorization', function () {
     $this->get('/spyglass/'.dashboardAssets()['js'])->assertForbidden();
 });
 
+it('serves the dashboard on the configured domain only', function () {
+    $app = $this->bootApplication(['spyglass.domain' => 'monitor.example.com']);
+    $app->make(Keepsuit\Spyglass\Spyglass::class)->auth(fn () => true);
+    Container::setInstance($app);
+
+    try {
+        $handle = fn (string $uri) => $app->make(Kernel::class)->handle(Request::create($uri))->getStatusCode();
+
+        expect($handle('http://monitor.example.com/spyglass'))->toBe(200)
+            ->and($handle('http://localhost/spyglass'))->toBe(404);
+    } finally {
+        Container::setInstance($this->app);
+    }
+});
+
 it('serves the shell and the assets under a custom path', function () {
     $app = $this->bootApplication(['spyglass.path' => 'admin/monitor']);
     $app->make(Keepsuit\Spyglass\Spyglass::class)->auth(fn () => true);

@@ -25,6 +25,11 @@ class ExceptionsModule extends Module
 
     protected const int MAX_FRAMES = 50;
 
+    public static function name(): string
+    {
+        return 'exceptions';
+    }
+
     /**
      * Static because `Spyglass::modules()` builds a new instance on every call.
      *
@@ -248,7 +253,7 @@ class ExceptionsModule extends Module
      */
     public function prune(): array
     {
-        $days = config('spyglass.modules.exceptions.retention.resolved_groups');
+        $days = static::config('retention.resolved_groups');
 
         if (! is_numeric($days)) {
             return [];

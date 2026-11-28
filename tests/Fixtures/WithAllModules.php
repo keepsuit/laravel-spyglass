@@ -3,7 +3,6 @@
 namespace Keepsuit\Spyglass\Tests\Fixtures;
 
 use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
-use Keepsuit\Spyglass\Spyglass;
 
 /**
  * Every module that records sources: two traits overriding the same hooks cannot be combined.
@@ -18,6 +17,6 @@ trait WithAllModules
     {
         $this->defineExceptionsAndLogsEnvironment($app);
 
-        Spyglass::$modules['schedule'] = ScheduleModule::class;
+        $this->enableModule($app, ScheduleModule::class);
     }
 }

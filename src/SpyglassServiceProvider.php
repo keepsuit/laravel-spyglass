@@ -29,6 +29,11 @@ use Keepsuit\Spyglass\Http\Controllers\ScheduleController;
 use Keepsuit\Spyglass\Http\Middleware\AcceptJson;
 use Keepsuit\Spyglass\Http\Middleware\Authorize;
 use Keepsuit\Spyglass\Http\Middleware\EnsureModuleEnabled;
+use Keepsuit\Spyglass\Modules\Exceptions\ExceptionsModule;
+use Keepsuit\Spyglass\Modules\Health\HealthModule;
+use Keepsuit\Spyglass\Modules\Logs\LogsModule;
+use Keepsuit\Spyglass\Modules\Queue\QueueModule;
+use Keepsuit\Spyglass\Modules\Schedule\ScheduleModule;
 use Keepsuit\Spyglass\Support\Sources;
 use Monolog\Handler\NoopHandler;
 use Monolog\Logger;
@@ -50,6 +55,11 @@ class SpyglassServiceProvider extends PackageServiceProvider
     {
         $this->app->singleton(Sources::class);
 
+        // At register time: a provider booting earlier can log, which resolves the stack.
+        if (! config()->has('logging.channels.spyglass')) {
+            config()->set('logging.channels.spyglass', ['driver' => 'spyglass']);
+        }
+
         $this->app->singleton(Spyglass::class, function ($app) {
             $config = $app['config'];
             $connection = $config->get('spyglass.storage.connection') ?? $config->get('database.default');
@@ -64,7 +74,7 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
             return new Spyglass(
                 connection: $connection,
-                cacheStore: $config->get('spyglass.cache.store') ?? $config->get('cache.default'),
+                cacheStore: $config->get('spyglass.cache') ?? $config->get('cache.default'),
                 enabled: (bool) $config->get('spyglass.enabled'),
             );
         });
@@ -102,7 +112,7 @@ class SpyglassServiceProvider extends PackageServiceProvider
         $this->registerAuthorization();
         $this->registerRoutes();
 
-        if (config('spyglass.prune.schedule')) {
+        if (config('spyglass.schedule_prune')) {
             $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
                 $schedule->command(PruneCommand::class)->daily();
             });
@@ -160,7 +170,8 @@ class SpyglassServiceProvider extends PackageServiceProvider
             return;
         }
 
-        Route::prefix(config('spyglass.path'))
+        Route::domain(config('spyglass.domain'))
+            ->prefix(config('spyglass.path'))
             ->middleware([...config('spyglass.middleware', []), Authorize::class])
             ->name('spyglass.')
             ->group(function () {
@@ -179,12 +190,12 @@ class SpyglassServiceProvider extends PackageServiceProvider
 
                     Route::get('overview', [OverviewController::class, 'index'])->name('overview');
 
-                    Route::middleware(EnsureModuleEnabled::class.':schedule')->group(function () {
+                    Route::middleware(EnsureModuleEnabled::class.':'.ScheduleModule::name())->group(function () {
                         Route::get('schedule', [ScheduleController::class, 'index'])->name('schedule');
                         Route::get('schedule/{task}', [ScheduleController::class, 'show'])->name('schedule.show');
                     });
 
-                    Route::middleware(EnsureModuleEnabled::class.':queue')->group(function () use ($csrf) {
+                    Route::middleware(EnsureModuleEnabled::class.':'.QueueModule::name())->group(function () use ($csrf) {
                         Route::get('queue', [QueueController::class, 'index'])->name('queue');
                         Route::get('queue/failed-jobs/{uuid}', [QueueController::class, 'show'])->name('queue.failed-jobs.show');
 
@@ -195,7 +206,7 @@ class SpyglassServiceProvider extends PackageServiceProvider
                         });
                     });
 
-                    Route::middleware(EnsureModuleEnabled::class.':exceptions')->group(function () use ($csrf) {
+                    Route::middleware(EnsureModuleEnabled::class.':'.ExceptionsModule::name())->group(function () use ($csrf) {
                         Route::get('exceptions', [ExceptionsController::class, 'index'])->name('exceptions');
                         Route::get('exceptions/{fingerprint}', [ExceptionsController::class, 'show'])->name('exceptions.show');
 
@@ -205,12 +216,12 @@ class SpyglassServiceProvider extends PackageServiceProvider
                         });
                     });
 
-                    Route::middleware(EnsureModuleEnabled::class.':logs')->group(function () {
+                    Route::middleware(EnsureModuleEnabled::class.':'.LogsModule::name())->group(function () {
                         Route::get('logs', [LogsController::class, 'index'])->name('logs');
                         Route::get('logs/{id}', [LogsController::class, 'show'])->whereNumber('id')->name('logs.show');
                     });
 
-                    Route::middleware(EnsureModuleEnabled::class.':health')->group(function () {
+                    Route::middleware(EnsureModuleEnabled::class.':'.HealthModule::name())->group(function () {
                         Route::get('health', [HealthController::class, 'index'])->name('health');
                     });
                 });

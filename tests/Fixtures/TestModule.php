@@ -12,6 +12,11 @@ class TestModule extends Module
 {
     public static bool $booted = false;
 
+    public static function name(): string
+    {
+        return 'test';
+    }
+
     public function boot(): void
     {
         static::$booted = true;

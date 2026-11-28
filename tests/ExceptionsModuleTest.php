@@ -304,7 +304,7 @@ it('throttles within the process with a cache store that keeps nothing', functio
 });
 
 it('throttles each scope on its own', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
 
     foreach (['acme', 'acme', 'other'] as $tenant) {
@@ -346,7 +346,7 @@ it('stores neither the path nor the query string of a request not routed yet', f
 });
 
 it('stores the request with query string values masked, except allowlisted keys', function () {
-    config()->set('spyglass.modules.exceptions.query_allowlist', ['page']);
+    config()->set(moduleKey('exceptions').'.query_allowlist', ['page']);
     Route::get('/orders/{order}', fn () => throw sameSiteException())->name('orders.show');
 
     $this->get('/orders/12?page=2&token=secret&filter[email]=a@b.c&flag')->assertServerError();
@@ -410,7 +410,7 @@ it('stores query errors without the driver message and the bindings', function (
 });
 
 it('does not let a job outlive its attempt in the source of later exceptions', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => $context['tenant_id'] ?? null);
     Context::add('tenant_id', 'acme');
     TestJob::dispatch('a', fail: true);
@@ -433,7 +433,7 @@ it('does not let a job outlive its attempt in the source of later exceptions', f
 });
 
 it('stores the job and its scope, captured before tenancy reverts the context', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? "tenant:{$context['tenant_id']}" : null);
     Event::listen(JobFailed::class, fn () => Context::forget('tenant_id'));
 
@@ -454,7 +454,7 @@ it('stores the job and its scope, captured before tenancy reverts the context', 
 });
 
 it('stores the current scope of a job that reports after switching tenant', function () {
-    config()->set('spyglass.context.keys', ['tenant_id']);
+    config()->set('spyglass.context', ['tenant_id']);
     SpyglassFacade::resolveScopeUsing(fn (array $context) => isset($context['tenant_id']) ? "tenant:{$context['tenant_id']}" : null);
 
     Context::add('tenant_id', 'acme');
@@ -581,7 +581,7 @@ it('prunes groups resolved before their retention, unless they occurred again', 
 
     $this->travelBack();
     reportAndFlush($other());
-    config()->set('spyglass.modules.exceptions.retention.occurrences', 60);
+    config()->set(moduleKey('exceptions').'.retention.occurrences', 60);
 
     $this->artisan('spyglass:prune')->assertSuccessful();
 
@@ -620,7 +620,7 @@ it('keeps the driver message of a PDO error out, whether wrapped, wrapping or co
 });
 
 it('removes the sources of the resolved groups it prunes', function () {
-    config()->set('spyglass.modules.exceptions.retention.resolved_groups', 1);
+    config()->set(moduleKey('exceptions').'.retention.resolved_groups', 1);
     $fingerprint = ExceptionFingerprint::for(sameSiteException());
 
     reportAndFlush(sameSiteException());
